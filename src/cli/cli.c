@@ -8155,7 +8155,11 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
             profiles.dialect == CBM_GRAPH_DIALECT_CODEX && access == CBM_GRAPH_ACCESS_DIRECT
                 ? cbm_render_graph_profile_codex_rc1(tier)
                 : NULL;
-        const char *released[4];
+        char *opencode_cli_legacy =
+            profiles.dialect == CBM_GRAPH_DIALECT_OPENCODE
+                ? cbm_render_graph_profile_opencode_cli_legacy(tier)
+                : NULL;
+        const char *released[5];
         size_t released_count = 0U;
         for (size_t i = 0U; i < alternate_count; i++) {
             if (alternate_docs[i]) {
@@ -8165,6 +8169,9 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
         if (codex_rc1) {
             released[released_count++] = codex_rc1;
         }
+        if (opencode_cli_legacy) {
+            released[released_count++] = opencode_cli_legacy;
+        }
         if (tier == CBM_GRAPH_TIER_VERIFY && profiles.legacy_verify_content) {
             released[released_count++] = profiles.legacy_verify_content;
         }
@@ -8172,6 +8179,7 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
                          ? cbm_text_migrate_owned_document(path, current, released, released_count)
                          : CLI_ERR;
         free(codex_rc1);
+        free(opencode_cli_legacy);
         for (size_t i = 0U; i < alternate_count; i++) {
             free(alternate_docs[i]);
         }
@@ -8217,7 +8225,11 @@ static void uninstall_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, b
             profiles.dialect == CBM_GRAPH_DIALECT_CODEX
                 ? cbm_render_graph_profile_codex_rc1(tier)
                 : NULL;
-        const char *released[5];
+        char *opencode_cli_legacy =
+            profiles.dialect == CBM_GRAPH_DIALECT_OPENCODE
+                ? cbm_render_graph_profile_opencode_cli_legacy(tier)
+                : NULL;
+        const char *released[6];
         size_t released_count = 0U;
         for (size_t i = 1U; i < variant_count; i++) {
             released[released_count++] = variants[i];
@@ -8225,12 +8237,16 @@ static void uninstall_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, b
         if (codex_rc1) {
             released[released_count++] = codex_rc1;
         }
+        if (opencode_cli_legacy) {
+            released[released_count++] = opencode_cli_legacy;
+        }
         if (tier == CBM_GRAPH_TIER_VERIFY && profiles.legacy_verify_content) {
             released[released_count++] = profiles.legacy_verify_content;
         }
         int result =
             cbm_text_remove_owned_document_any(path, variants[0], released, released_count);
         free(codex_rc1);
+        free(opencode_cli_legacy);
         for (size_t i = 0U; i < variant_count; i++) {
             free(variants[i]);
         }

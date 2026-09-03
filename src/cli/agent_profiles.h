@@ -61,6 +61,11 @@ char *cbm_render_graph_profile(cbm_graph_profile_dialect_t dialect, cbm_graph_ti
  * so install/uninstall can recognize and migrate those files. */
 char *cbm_render_graph_profile_codex_rc1(cbm_graph_tier_t tier);
 
+/* OpenCode CLI rendering as published in downloads 2b8488c3 (bash allowlist
+ * without the literal "$CBM*" pattern), kept so upgrades migrate it instead
+ * of preserving it as a user-modified file. */
+char *cbm_render_graph_profile_opencode_cli_legacy(cbm_graph_tier_t tier);
+
 /* Vibe stores the behavioral prompt separately from its TOML agent definition.
  * Other integrations may also use this as the canonical contract text. */
 char *cbm_render_graph_prompt(cbm_graph_tier_t tier, cbm_graph_access_t access);

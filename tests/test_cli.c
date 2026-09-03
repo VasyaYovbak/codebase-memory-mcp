@@ -5997,6 +5997,52 @@ TEST(cli_opencode_cli_mode_replaces_owned_mcp) {
     PASS();
 }
 
+TEST(cli_opencode_cli_legacy_profile_migrates) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-opencode-legacy-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char *saved_home = save_test_env("HOME");
+    char *saved_path = save_test_env("PATH");
+    char *saved_opencode = save_test_env("OPENCODE_CONFIG");
+    char *saved_xdg = save_test_env("XDG_CONFIG_HOME");
+    cbm_setenv("HOME", tmpdir, 1);
+    cbm_setenv("PATH", tmpdir, 1);
+    cbm_unsetenv("OPENCODE_CONFIG");
+    cbm_unsetenv("XDG_CONFIG_HOME");
+
+    char config_dir[512];
+    char agent_path[640];
+    snprintf(config_dir, sizeof(config_dir), "%s/.config/opencode", tmpdir);
+    snprintf(agent_path, sizeof(agent_path), "%s/agents/codebase-memory.md", config_dir);
+    test_mkdirp(config_dir);
+
+    /* Simulate downloads 2b8488c3 CLI profiles (no literal "$CBM*" pattern). */
+    char *legacy = cbm_render_graph_profile_opencode_cli_legacy(CBM_GRAPH_TIER_VERIFY);
+    bool migrated = false;
+    if (legacy) {
+        write_test_file(agent_path, legacy);
+        free(legacy);
+        cbm_cli_set_agent_install_mode_for_testing(true);
+        int cli_rc =
+            cbm_install_agent_configs(tmpdir, "/opt/codebase-memory-mcp", false, false);
+        cbm_cli_set_agent_install_mode_for_testing(false);
+        char *agent = read_test_file_alloc(agent_path);
+        migrated = cli_rc == 0 && agent && strstr(agent, "\"$CBM*\": allow") != NULL;
+        free(agent);
+    }
+
+    restore_test_env("HOME", saved_home);
+    restore_test_env("PATH", saved_path);
+    restore_test_env("OPENCODE_CONFIG", saved_opencode);
+    restore_test_env("XDG_CONFIG_HOME", saved_xdg);
+    test_rmdir_r(tmpdir);
+    if (!migrated)
+        FAIL("OpenCode legacy CLI profile must migrate to the current CLI profile");
+    PASS();
+}
+
 TEST(cli_tiered_vibe_installs_matching_agent_prompt_sets) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-tiered-vibe-XXXXXX");
@@ -14007,6 +14053,7 @@ SUITE(cli) {
     RUN_TEST(cli_owned_durable_profiles_preserve_user_files);
     RUN_TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall);
     RUN_TEST(cli_opencode_cli_mode_replaces_owned_mcp);
+    RUN_TEST(cli_opencode_cli_legacy_profile_migrates);
     RUN_TEST(cli_tiered_vibe_installs_matching_agent_prompt_sets);
     RUN_TEST(cli_tiered_grok_installs_profiles_and_withholds_hooks);
     RUN_TEST(cli_grok_mcp_preserves_foreign_table);

@@ -790,3 +790,32 @@ char *cbm_render_graph_profile_codex_rc1(cbm_graph_tier_t tier) {
     }
     return profile_buffer_finish(&buffer);
 }
+
+char *cbm_render_graph_profile_opencode_cli_legacy(cbm_graph_tier_t tier) {
+    /* Published downloads 2b8488c3 rendered CLI profiles without the literal
+     * "$CBM*" bash pattern. Recognize that text for migration so upgrades do
+     * not preserve it as a user-modified file. */
+    if (!tier_valid(tier)) {
+        return NULL;
+    }
+    char *prompt = cbm_render_graph_prompt(tier, CBM_GRAPH_ACCESS_CLI);
+    if (!prompt) {
+        return NULL;
+    }
+    const char *description = profile_description(tier, CBM_GRAPH_ACCESS_CLI);
+    profile_buffer_t buffer;
+    profile_buffer_init(&buffer);
+    bool ok = profile_buffer_append(&buffer, "---\ndescription: ") &&
+              profile_buffer_append(&buffer, description) &&
+              profile_buffer_append(
+                  &buffer, "\nmode: subagent\npermission:\n  \"*\": deny\n  read: allow\n  grep: "
+                           "allow\n  glob: allow\n  bash:\n    \"*\": deny\n    "
+                           "\"*codebase-memory-mcp cli*\": allow\n---\n") &&
+              profile_buffer_append(&buffer, prompt);
+    free(prompt);
+    if (!ok) {
+        profile_buffer_discard(&buffer);
+        return NULL;
+    }
+    return profile_buffer_finish(&buffer);
+}
