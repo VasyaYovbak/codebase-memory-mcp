@@ -7767,6 +7767,7 @@ typedef struct {
     const char *legacy_verify_content;
     cbm_graph_profile_dialect_t dialect;
     bool force_handoff;
+    bool force_cli;
 } cbm_tiered_profile_set_t;
 
 static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, bool dry_run);
@@ -8107,6 +8108,9 @@ static cbm_graph_access_t cbm_tiered_profile_access(cbm_graph_profile_dialect_t 
 }
 
 static cbm_graph_access_t cbm_tiered_profile_set_access(cbm_tiered_profile_set_t profiles) {
+    if (profiles.force_cli) {
+        return CBM_GRAPH_ACCESS_CLI;
+    }
     return !profiles.force_handoff && cbm_graph_dialect_direct_capable(profiles.dialect)
                ? CBM_GRAPH_ACCESS_DIRECT
                : CBM_GRAPH_ACCESS_HANDOFF;
@@ -8135,18 +8139,28 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
             record_agent_config_error(false, profiles.label, "agent_render", path);
             continue;
         }
-        cbm_graph_access_t alternate_access =
-            access == CBM_GRAPH_ACCESS_DIRECT ? CBM_GRAPH_ACCESS_HANDOFF : CBM_GRAPH_ACCESS_DIRECT;
-        char *alternate = cbm_render_graph_profile(profiles.dialect, tier, alternate_access,
-                                                   profiles.binary_path);
+        cbm_graph_access_t alternates[2];
+        size_t alternate_count = 0U;
+        for (int candidate = 0; candidate < (int)CBM_GRAPH_ACCESS_COUNT; candidate++) {
+            if (candidate != (int)access) {
+                alternates[alternate_count++] = (cbm_graph_access_t)candidate;
+            }
+        }
+        char *alternate_docs[2] = {NULL, NULL};
+        for (size_t i = 0U; i < alternate_count; i++) {
+            alternate_docs[i] = cbm_render_graph_profile(profiles.dialect, tier, alternates[i],
+                                                         profiles.binary_path);
+        }
         char *codex_rc1 =
             profiles.dialect == CBM_GRAPH_DIALECT_CODEX && access == CBM_GRAPH_ACCESS_DIRECT
                 ? cbm_render_graph_profile_codex_rc1(tier)
                 : NULL;
-        const char *released[3];
+        const char *released[4];
         size_t released_count = 0U;
-        if (alternate) {
-            released[released_count++] = alternate;
+        for (size_t i = 0U; i < alternate_count; i++) {
+            if (alternate_docs[i]) {
+                released[released_count++] = alternate_docs[i];
+            }
         }
         if (codex_rc1) {
             released[released_count++] = codex_rc1;
@@ -8158,7 +8172,9 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
                          ? cbm_text_migrate_owned_document(path, current, released, released_count)
                          : CLI_ERR;
         free(codex_rc1);
-        free(alternate);
+        for (size_t i = 0U; i < alternate_count; i++) {
+            free(alternate_docs[i]);
+        }
         free(current);
         if (result != CLI_OK) {
             if (result > CLI_OK) {
@@ -8172,7 +8188,6 @@ static void install_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, boo
 }
 
 static void uninstall_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, bool dry_run) {
-    cbm_graph_access_t access = cbm_tiered_profile_set_access(profiles);
     for (int value = 0; value < (int)CBM_GRAPH_TIER_COUNT; value++) {
         cbm_graph_tier_t tier = (cbm_graph_tier_t)value;
         char path[CLI_BUF_1K];
@@ -8184,24 +8199,28 @@ static void uninstall_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, b
             printf("  %s agent: would remove owned profile %s\n", profiles.label, path);
             continue;
         }
-        char *current =
-            cbm_render_graph_profile(profiles.dialect, tier, access, profiles.binary_path);
-        if (!current) {
+        char *variants[(int)CBM_GRAPH_ACCESS_COUNT];
+        size_t variant_count = 0U;
+        for (int candidate = 0; candidate < (int)CBM_GRAPH_ACCESS_COUNT; candidate++) {
+            char *rendered = cbm_render_graph_profile(profiles.dialect, tier,
+                                                      (cbm_graph_access_t)candidate,
+                                                      profiles.binary_path);
+            if (rendered) {
+                variants[variant_count++] = rendered;
+            }
+        }
+        if (variant_count == 0U) {
             record_agent_config_error(true, profiles.label, "agent_render", path);
             continue;
         }
-        cbm_graph_access_t alternate_access =
-            access == CBM_GRAPH_ACCESS_DIRECT ? CBM_GRAPH_ACCESS_HANDOFF : CBM_GRAPH_ACCESS_DIRECT;
-        char *alternate = cbm_render_graph_profile(profiles.dialect, tier, alternate_access,
-                                                   profiles.binary_path);
         char *codex_rc1 =
-            profiles.dialect == CBM_GRAPH_DIALECT_CODEX && access == CBM_GRAPH_ACCESS_DIRECT
+            profiles.dialect == CBM_GRAPH_DIALECT_CODEX
                 ? cbm_render_graph_profile_codex_rc1(tier)
                 : NULL;
-        const char *released[3];
+        const char *released[5];
         size_t released_count = 0U;
-        if (alternate) {
-            released[released_count++] = alternate;
+        for (size_t i = 1U; i < variant_count; i++) {
+            released[released_count++] = variants[i];
         }
         if (codex_rc1) {
             released[released_count++] = codex_rc1;
@@ -8209,10 +8228,12 @@ static void uninstall_tiered_agent_profiles(cbm_tiered_profile_set_t profiles, b
         if (tier == CBM_GRAPH_TIER_VERIFY && profiles.legacy_verify_content) {
             released[released_count++] = profiles.legacy_verify_content;
         }
-        int result = cbm_text_remove_owned_document_any(path, current, released, released_count);
+        int result =
+            cbm_text_remove_owned_document_any(path, variants[0], released, released_count);
         free(codex_rc1);
-        free(alternate);
-        free(current);
+        for (size_t i = 0U; i < variant_count; i++) {
+            free(variants[i]);
+        }
         if (result < CLI_OK) {
             record_agent_config_error(true, profiles.label, "agent_uninstall", path);
         } else if (result > CLI_OK) {
@@ -9099,9 +9120,11 @@ static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const
                 if (!mcp_removed) {
                     record_agent_config_error(false, "OpenCode", "mcp_uninstall", cp);
                 } else {
-                    /* Direct OpenCode profiles require the MCP entry; a CLI bridge
-                     * provides $CBM only to the parent shell. */
-                    uninstall_tiered_agent_profiles(profiles, dry_run);
+                    /* Verified: Task children inherit $CBM (shell.env), so install full
+                     * CLI profiles with bash-allowlisted $CBM instead of removing them. */
+                    cbm_tiered_profile_set_t cli_profiles = profiles;
+                    cli_profiles.force_cli = true;
+                    install_tiered_agent_profiles(cli_profiles, dry_run);
                     install_generated_client_extension("OpenCode", plugin_path, binary_path,
                                                        cbm_client_adapter_opencode, dry_run);
                 }
@@ -9109,6 +9132,16 @@ static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const
             install_managed_agent_instructions("OpenCode", ip, dry_run);
             install_agent_skill("OpenCode", skills_dir, force, dry_run);
             if (g_install_plan) {
+                install_tiered_agent_profiles(
+                    (cbm_tiered_profile_set_t){
+                        .label = "OpenCode",
+                        .verify_path = ap,
+                        .binary_path = binary_path,
+                        .legacy_verify_content = legacy_opencode_verify_agent_content,
+                        .dialect = CBM_GRAPH_DIALECT_OPENCODE,
+                        .force_cli = true,
+                    },
+                    dry_run);
                 install_generated_client_extension("OpenCode", plugin_path, binary_path,
                                                    cbm_client_adapter_opencode, dry_run);
             }

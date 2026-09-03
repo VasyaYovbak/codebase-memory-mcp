@@ -20,6 +20,7 @@ typedef enum {
 typedef enum {
     CBM_GRAPH_ACCESS_DIRECT = 0,
     CBM_GRAPH_ACCESS_HANDOFF,
+    CBM_GRAPH_ACCESS_CLI,
     CBM_GRAPH_ACCESS_COUNT
 } cbm_graph_access_t;
 

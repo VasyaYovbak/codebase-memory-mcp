@@ -5975,11 +5975,15 @@ TEST(cli_opencode_cli_mode_replaces_owned_mcp) {
 
     char *config = read_test_file_alloc(config_path);
     const char *const plugin_terms[] = {"shell.env", "output.env.CBM", "daemon start"};
-    struct stat agent_state;
-    bool switched = mcp_rc == 0 && cli_rc == 0 && config &&
+    char *agent = read_test_file_alloc(agent_path);
+    bool switched = mcp_rc == 0 && cli_rc == 0 && config && agent &&
                     !strstr(config, "codebase-memory-mcp") &&
                     test_file_contains_all(plugin_path, plugin_terms, 3U) &&
-                    stat(agent_path, &agent_state) != 0;
+                    strstr(agent, "mode: subagent") && strstr(agent, "bash:") &&
+                    strstr(agent, "*codebase-memory-mcp cli*") && strstr(agent, "$CBM") &&
+                    !strstr(agent, "mcpServers") &&
+                    !strstr(agent, "codebase-memory-mcp_search_graph");
+    free(agent);
     free(config);
 
     restore_test_env("HOME", saved_home);
