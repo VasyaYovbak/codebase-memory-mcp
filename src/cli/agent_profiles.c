@@ -611,8 +611,8 @@ static bool render_profile_text(profile_buffer_t *buffer, cbm_graph_profile_dial
                 !profile_buffer_append(buffer, description) ||
                 !profile_buffer_append(
                     buffer, "\nmode: subagent\npermission:\n  \"*\": deny\n  read: allow\n  grep: "
-                            "allow\n  glob: allow\n  bash:\n    \"*\": deny\n    "
-                            "\"*codebase-memory-mcp cli*\": allow\n---\n") ||
+                            "allow\n  glob: allow\n  bash:\n    \"*\": deny\n    \"$CBM*\": allow\n"
+                            "    \"*codebase-memory-mcp cli*\": allow\n---\n") ||
                 !profile_buffer_append(buffer, prompt)) {
                 return false;
             }

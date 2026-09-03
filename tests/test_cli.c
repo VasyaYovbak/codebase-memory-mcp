@@ -5980,6 +5980,7 @@ TEST(cli_opencode_cli_mode_replaces_owned_mcp) {
                     !strstr(config, "codebase-memory-mcp") &&
                     test_file_contains_all(plugin_path, plugin_terms, 3U) &&
                     strstr(agent, "mode: subagent") && strstr(agent, "bash:") &&
+                    strstr(agent, "\"$CBM*\": allow") &&
                     strstr(agent, "*codebase-memory-mcp cli*") && strstr(agent, "$CBM") &&
                     !strstr(agent, "mcpServers") &&
                     !strstr(agent, "codebase-memory-mcp_search_graph");
