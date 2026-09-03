@@ -107,7 +107,7 @@ Restart your coding agent. Say **"Index this project"** — done.
 The `install` command automatically strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
 </details>
 
-The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported. Codex and OpenCode use the local one-shot CLI instead: their installed guidance uses `$CBM <tool>`, with `$CBM` already including `cli`.
+The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported. Codex uses the local one-shot CLI: its installed guidance uses `$CBM <tool>`, with `$CBM` already including `cli`. OpenCode also receives its MCP entry and three scoped subagents; its plugin keeps the same CLI command available and starts the shared daemon once when OpenCode loads.
 
 ### Session Coordination Daemon
 

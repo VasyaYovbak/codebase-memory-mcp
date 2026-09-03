@@ -3729,11 +3729,6 @@ int cbm_remove_opencode_mcp_owned(const char *binary_path, const char *config_pa
     return cbm_remove_json_mcp(config_path, path, 1U, CBM_JSON_MCP_LOCAL_ARRAY, binary_path);
 }
 
-static int cbm_configure_opencode_cli(const char *binary_path, const char *config_path) {
-    (void)binary_path;
-    return cbm_remove_opencode_mcp(config_path);
-}
-
 static int cbm_upsert_kilo_mcp(const char *binary_path, const char *config_path) {
     static const char *const path[] = {"mcp"};
     return cbm_upsert_json_mcp(binary_path, config_path, path, 1U, CBM_JSON_MCP_LOCAL_ARRAY);
@@ -8968,20 +8963,18 @@ static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const
         snprintf(ip, sizeof(ip), "%s/.config/opencode/AGENTS.md", home);
         snprintf(skills_dir, sizeof(skills_dir), "%s/.config/opencode/skills", home);
         snprintf(ap, sizeof(ap), "%s/.config/opencode/agents/codebase-memory.md", home);
-        install_cli_agent_config("OpenCode", binary_path, cp, ip, dry_run,
-                                 cbm_configure_opencode_cli);
+        install_generic_agent_config("OpenCode", binary_path, cp, ip, dry_run,
+                                     cbm_upsert_opencode_mcp);
         install_agent_skill("OpenCode", skills_dir, force, dry_run);
-        if (!g_install_plan) {
-            uninstall_tiered_agent_profiles(
-                (cbm_tiered_profile_set_t){
-                    .label = "OpenCode",
-                    .verify_path = ap,
-                    .binary_path = binary_path,
-                    .legacy_verify_content = legacy_opencode_verify_agent_content,
-                    .dialect = CBM_GRAPH_DIALECT_OPENCODE,
-                },
-                dry_run);
-        }
+        install_tiered_agent_profiles(
+            (cbm_tiered_profile_set_t){
+                .label = "OpenCode",
+                .verify_path = ap,
+                .binary_path = binary_path,
+                .legacy_verify_content = legacy_opencode_verify_agent_content,
+                .dialect = CBM_GRAPH_DIALECT_OPENCODE,
+            },
+            dry_run);
         /* OpenCode's documented plugin hook injects CBM into every shell command. */
         char plugin_path[CLI_BUF_1K];
         snprintf(plugin_path, sizeof(plugin_path), "%s/.config/opencode/plugins/cbm-augment.ts",

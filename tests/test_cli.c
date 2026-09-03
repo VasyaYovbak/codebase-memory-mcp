@@ -5163,6 +5163,7 @@ TEST(cli_existing_agents_install_durable_child_context) {
     const char *const planned[] = {
         "/.openclaw/workspace/AGENTS.md",     "/.openclaw/workspace/TOOLS.md",
         "/.kiro/steering/codebase-memory.md", "/.config/opencode/AGENTS.md",
+        "/.config/opencode/agents/codebase-memory.md",
 #ifdef _WIN32
         "/AppData/Roaming/Zed/AGENTS.md",
 #else
@@ -5191,11 +5192,20 @@ TEST(cli_existing_agents_install_durable_child_context) {
     snprintf(path, sizeof(path), "%s/.config/opencode/AGENTS.md", tmpdir);
     files_ok = files_ok && test_file_contains_all(path, durable, 5);
     snprintf(path, sizeof(path), "%s/.config/opencode/opencode.json", tmpdir);
-    struct stat state;
-    files_ok = files_ok && stat(path, &state) != 0;
+    files_ok = files_ok && test_file_contains_all(path, (const char *const[]){"codebase-memory-mcp",
+                                                                                "/usr/local/bin/codebase-memory-mcp"},
+                                                        2);
     snprintf(path, sizeof(path), "%s/.config/opencode/plugins/cbm-augment.ts", tmpdir);
-    const char *const opencode_cli[] = {"shell.env", "output.env.CBM", " cli'"};
+    const char *const opencode_cli[] = {"shell.env", "output.env.CBM", "daemon start"};
     files_ok = files_ok && test_file_contains_all(path, opencode_cli, 3);
+    const char *const opencode_agent[] = {"mode: subagent", "\"*\": deny", "read: allow",
+                                          "codebase-memory-mcp_search_graph", "Tier 2"};
+    snprintf(path, sizeof(path), "%s/.config/opencode/agents/codebase-memory.md", tmpdir);
+    files_ok = files_ok && test_file_contains_all(path, opencode_agent, 5);
+    snprintf(path, sizeof(path), "%s/.config/opencode/agents/codebase-memory-scout.md", tmpdir);
+    files_ok = files_ok && test_file_contains_all(path, opencode_agent, 4);
+    snprintf(path, sizeof(path), "%s/.config/opencode/agents/codebase-memory-auditor.md", tmpdir);
+    files_ok = files_ok && test_file_contains_all(path, opencode_agent, 4);
 #ifdef _WIN32
     snprintf(path, sizeof(path), "%s/AppData/Roaming/Zed/AGENTS.md", tmpdir);
 #else

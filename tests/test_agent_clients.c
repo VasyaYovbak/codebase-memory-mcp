@@ -1275,13 +1275,15 @@ TEST(client_adapter_escapes_windows_paths_and_quotes) {
     PASS();
 }
 
-/* hook-augment requires hook_event_name and accepts Grep/Glob only under
- * PreToolUse. #616's payload omitted it, so the plugin produced zero bytes and
- * was a silent no-op for six weeks. Pin the field into the generated payload. */
-TEST(client_adapter_opencode_injects_cli_environment) {
+/* OpenCode loads this plugin once per application start. It must warm the
+ * idempotent daemon before injecting the one-shot CLI into shell commands. */
+TEST(client_adapter_opencode_starts_daemon_and_injects_cli_environment) {
     char *js = cbm_client_adapter_opencode("/usr/local/bin/codebase-memory-mcp");
     ASSERT_NOT_NULL(js);
-    ASSERT_NOT_NULL(strstr(js, "const CBM = '/usr/local/bin/codebase-memory-mcp cli'"));
+    ASSERT_NOT_NULL(strstr(js, "const CBM_BINARY = '/usr/local/bin/codebase-memory-mcp'"));
+    ASSERT_NOT_NULL(strstr(js, "daemon start"));
+    ASSERT_NOT_NULL(strstr(js, "await $`"));
+    ASSERT_NOT_NULL(strstr(js, ".quiet().nothrow()"));
     ASSERT_NOT_NULL(strstr(js, "'shell.env'"));
     ASSERT_NOT_NULL(strstr(js, "output.env.CBM = CBM"));
     ASSERT_NULL(strstr(js, "registerTool"));
@@ -1292,12 +1294,9 @@ TEST(client_adapter_opencode_injects_cli_environment) {
     PASS();
 }
 
-/* The richer OpenCode adapter carries every context surface the plugin API
- * documents: session-start tier routing on the first tool result of each
- * session, post-read coverage notes, and post-compaction reinjection through
- * the documented experimental surface. It must unwrap hook-augment's Claude
- * JSON envelope so plain text — not raw JSON — reaches the model. */
-TEST(client_adapter_opencode_omits_mcp_hooks) {
+/* The plugin uses only OpenCode's documented shell integration. MCP transport
+ * remains in opencode.json, rather than being reimplemented as plugin tools. */
+TEST(client_adapter_opencode_uses_documented_shell_without_plugin_mcp_hooks) {
     char *js = cbm_client_adapter_opencode("/usr/local/bin/codebase-memory-mcp");
     ASSERT_NOT_NULL(js);
     ASSERT_NULL(strstr(js, "hook_event_name"));
@@ -1352,7 +1351,7 @@ SUITE(agent_clients) {
     RUN_TEST(client_adapter_pi_sends_arguments_over_stdin_issue1834);
     RUN_TEST(client_adapter_pi_wraps_result_and_honors_abort);
     RUN_TEST(client_adapter_escapes_windows_paths_and_quotes);
-    RUN_TEST(client_adapter_opencode_injects_cli_environment);
-    RUN_TEST(client_adapter_opencode_omits_mcp_hooks);
+    RUN_TEST(client_adapter_opencode_starts_daemon_and_injects_cli_environment);
+    RUN_TEST(client_adapter_opencode_uses_documented_shell_without_plugin_mcp_hooks);
     RUN_TEST(client_adapter_rejects_missing_binary_path);
 }

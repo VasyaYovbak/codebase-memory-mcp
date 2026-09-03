@@ -265,16 +265,19 @@ char *cbm_client_adapter_opencode(const char *binary_path) {
 
     adapter_sb_t sb = {0};
     emit_header(&sb, "OpenCode");
-    sb_append(&sb, "// OpenCode runs CBM through its one-shot CLI, not an MCP server.\n");
-    sb_append(&sb, "const CBM = '");
+    sb_append(&sb, "const CBM_BINARY = '");
     sb_append(&sb, bin);
-    sb_append(&sb, " cli';\n\n");
+    sb_append(&sb, "';\nconst CBM = `${CBM_BINARY} cli`;\n\n");
 
-    sb_append(&sb, "export const CodebaseMemory = async () => ({\n"
-                   "  'shell.env': async (_input, output) => {\n"
-                   "    output.env.CBM = CBM;\n"
-                   "  },\n"
-                   "});\n");
+    sb_append(&sb, "export const CodebaseMemory = async ({ $ }) => {\n"
+                   "  // `daemon start` is idempotent; pay startup once while the plugin loads.\n"
+                   "  await $`${CBM_BINARY} daemon start`.quiet().nothrow();\n\n"
+                   "  return {\n"
+                   "    'shell.env': async (_input, output) => {\n"
+                   "      output.env.CBM = CBM;\n"
+                   "    },\n"
+                   "  };\n"
+                   "};\n");
 
     if (sb.failed) {
         free(sb.buf);
