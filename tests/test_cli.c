@@ -5307,12 +5307,12 @@ TEST(cli_durable_profiles_follow_current_vendor_paths) {
                          strstr(plan, "\"instruction_files_planned\"");
     const char *const planned[] = {
         "/.claude/agents/codebase-memory.md",
+        "/vendor-codex/config.toml",
         "/vendor-codex/skills/codebase-memory/SKILL.md",
-        "/vendor-codex/agents/codebase-memory.toml",
         "/.cursor/skills/codebase-memory/SKILL.md",
         "/.cursor/agents/codebase-memory.md",
+        "/.config/opencode/AGENTS.md",
         "/.config/opencode/skills/codebase-memory/SKILL.md",
-        "/.config/opencode/agents/codebase-memory.md",
         "/vendor-qwen/skills/codebase-memory/SKILL.md",
         "/vendor-qwen/agents/codebase-memory.md",
         "/vendor-copilot/skills/codebase-memory/SKILL.md",
@@ -5358,21 +5358,14 @@ TEST(cli_durable_profiles_follow_current_vendor_paths) {
                                         "search_graph"};
     files_ok = files_ok && test_file_contains_all(path, claude_terms, 7U);
 
-    snprintf(path, sizeof(path), "%s/agents/codebase-memory.toml", codex_home);
-    const char *const codex_terms[] = {"name = \"codebase-memory\"",
-                                       "description = ",
-                                       "developer_instructions = ",
-                                       "sandbox_mode = \"read-only\"",
-                                       "[mcp_servers.codebase-memory-mcp]",
-                                       "command = \"/opt/codebase-memory-mcp\"",
-                                       "args = [\"--tool-profile=analysis\"]",
-                                       "check_index_coverage"};
-    files_ok = files_ok && test_file_contains_all(path, codex_terms, 8U);
-    char *profile = read_test_file_alloc(path);
-    files_ok = files_ok && profile && !strstr(profile, "model =") &&
-               !strstr(profile, "index_repository") && !strstr(profile, "delete_project") &&
-               !strstr(profile, "manage_adr") && !strstr(profile, "ingest_traces");
-    free(profile);
+    snprintf(path, sizeof(path), "%s/config.toml", codex_home);
+    const char *const codex_terms[] = {"[shell_environment_policy]",
+                                       "CBM = \"/opt/codebase-memory-mcp cli\""};
+    files_ok = files_ok && test_file_contains_all(path, codex_terms, 2U);
+    snprintf(path, sizeof(path), "%s/AGENTS.md", codex_home);
+    const char *const codex_instructions[] = {"Codebase Memory", "$CBM explore_search"};
+    files_ok = files_ok && test_file_contains_all(path, codex_instructions, 2U);
+    char *profile = NULL;
 
     snprintf(path, sizeof(path), "%s/.cursor/agents/codebase-memory.md", tmpdir);
     const char *const cursor_terms[] = {"name: codebase-memory", "model: inherit", "readonly: true",
@@ -5383,14 +5376,15 @@ TEST(cli_durable_profiles_follow_current_vendor_paths) {
                !strstr(profile, "Use codebase-memory-mcp for read-only structural discovery");
     free(profile);
 
+    snprintf(path, sizeof(path), "%s/.config/opencode/AGENTS.md", tmpdir);
+    const char *const opencode_instructions[] = {"Codebase Memory", "$CBM explore_search"};
+    files_ok = files_ok && test_file_contains_all(path, opencode_instructions, 2U);
+    snprintf(path, sizeof(path), "%s/.config/opencode/plugins/cbm-augment.ts", tmpdir);
+    const char *const opencode_plugin[] = {"shell.env", "output.env.CBM", " cli'"};
+    files_ok = files_ok && test_file_contains_all(path, opencode_plugin, 3U);
     snprintf(path, sizeof(path), "%s/.config/opencode/agents/codebase-memory.md", tmpdir);
-    const char *const opencode_terms[] = {"description:",
-                                          "mode: subagent",
-                                          "\"*\": deny",
-                                          "read: allow",
-                                          "codebase-memory-mcp_search_graph\": allow",
-                                          "check_index_coverage"};
-    files_ok = files_ok && test_file_contains_all(path, opencode_terms, 6U);
+    struct stat opencode_agent_state;
+    files_ok = files_ok && stat(path, &opencode_agent_state) != 0;
 
     snprintf(path, sizeof(path), "%s/agents/codebase-memory.md", qwen_home);
     const char *const qwen_terms[] = {"name: codebase-memory",
@@ -5783,11 +5777,14 @@ TEST(cli_owned_durable_profiles_preserve_user_files) {
     snprintf(opencode_agent, sizeof(opencode_agent),
              "%s/.config/opencode/agents/codebase-memory.md", tmpdir);
     struct stat file_state;
-    bool exact_installed = stat(codex_agent, &file_state) == 0 &&
+    bool exact_installed = stat(codex_agent, &file_state) != 0 &&
                            stat(copilot_skill, &file_state) == 0 &&
-                           stat(opencode_agent, &file_state) == 0;
+                           stat(opencode_agent, &file_state) != 0;
     const char *modified_codex = "name = \"user-owned-codebase-memory\"\n";
     const char *modified_skill = "---\nname: codebase-memory\ndescription: User copy.\n---\n";
+    char codex_agents_dir[768];
+    snprintf(codex_agents_dir, sizeof(codex_agents_dir), "%s/.codex/agents", tmpdir);
+    test_mkdirp(codex_agents_dir);
     write_test_file(codex_agent, modified_codex);
     write_test_file(copilot_skill, modified_skill);
 
