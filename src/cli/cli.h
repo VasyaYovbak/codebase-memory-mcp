@@ -264,6 +264,8 @@ int cbm_upsert_junie_mcp_with_previous_for_testing(const char *binary_path,
 
 /* Codex CLI: upsert MCP entry in $CODEX_HOME/config.toml. Returns 0 on success. */
 int cbm_upsert_codex_mcp(const char *binary_path, const char *config_path);
+/* Codex CLI: inject $CBM with CLI mode in $CODEX_HOME/config.toml. Returns 0 on success. */
+int cbm_upsert_codex_cli_environment(const char *binary_path, const char *config_path);
 
 /* Remove CMM MCP entry from Codex config.toml. Returns 0 on success. */
 int cbm_remove_codex_mcp(const char *config_path);

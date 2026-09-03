@@ -1278,14 +1278,15 @@ TEST(client_adapter_escapes_windows_paths_and_quotes) {
 /* hook-augment requires hook_event_name and accepts Grep/Glob only under
  * PreToolUse. #616's payload omitted it, so the plugin produced zero bytes and
  * was a silent no-op for six weeks. Pin the field into the generated payload. */
-TEST(client_adapter_opencode_sends_the_required_hook_event) {
+TEST(client_adapter_opencode_injects_cli_environment) {
     char *js = cbm_client_adapter_opencode("/usr/local/bin/codebase-memory-mcp");
     ASSERT_NOT_NULL(js);
-    ASSERT_NOT_NULL(strstr(js, "hook_event_name: 'PreToolUse'"));
-    ASSERT_NOT_NULL(strstr(js, "tool.execute.after"));
-    /* OpenCode reaches the tools over MCP already; this adapter must not
-     * register any, or we reintroduce the second tool surface. */
+    ASSERT_NOT_NULL(strstr(js, "const CBM = '/usr/local/bin/codebase-memory-mcp cli'"));
+    ASSERT_NOT_NULL(strstr(js, "'shell.env'"));
+    ASSERT_NOT_NULL(strstr(js, "output.env.CBM = CBM"));
     ASSERT_NULL(strstr(js, "registerTool"));
+    ASSERT_NULL(strstr(js, "hook-augment"));
+    ASSERT_NULL(strstr(js, "mcp"));
     ASSERT_NULL(strstr(js, CBM_ADAPTER_MARKER_START));
     free(js);
     PASS();
@@ -1296,19 +1297,13 @@ TEST(client_adapter_opencode_sends_the_required_hook_event) {
  * session, post-read coverage notes, and post-compaction reinjection through
  * the documented experimental surface. It must unwrap hook-augment's Claude
  * JSON envelope so plain text — not raw JSON — reaches the model. */
-TEST(client_adapter_opencode_covers_lifecycle_read_and_compaction) {
+TEST(client_adapter_opencode_omits_mcp_hooks) {
     char *js = cbm_client_adapter_opencode("/usr/local/bin/codebase-memory-mcp");
     ASSERT_NOT_NULL(js);
-    ASSERT_NOT_NULL(strstr(js, "hook_event_name: 'SessionStart'"));
-    ASSERT_NOT_NULL(strstr(js, "hook_event_name: 'PostToolUse'"));
-    ASSERT_NOT_NULL(strstr(js, "tool_name: 'Read'"));
-    ASSERT_NOT_NULL(strstr(js, "'experimental.session.compacting'"));
-    ASSERT_NOT_NULL(strstr(js, "additionalContext"));
-    /* file_path is the key hook-augment's default dialect reads; OpenCode's
-     * read tool argues filePath, so the adapter must map it. */
-    ASSERT_NOT_NULL(strstr(js, "file_path: filePath"));
-    /* Session context may only be injected once per session id. */
-    ASSERT_NOT_NULL(strstr(js, "seen.has(sid)"));
+    ASSERT_NULL(strstr(js, "hook_event_name"));
+    ASSERT_NULL(strstr(js, "tool.execute.after"));
+    ASSERT_NULL(strstr(js, "experimental.session.compacting"));
+    ASSERT_NULL(strstr(js, "spawn("));
     free(js);
     PASS();
 }
@@ -1357,7 +1352,7 @@ SUITE(agent_clients) {
     RUN_TEST(client_adapter_pi_sends_arguments_over_stdin_issue1834);
     RUN_TEST(client_adapter_pi_wraps_result_and_honors_abort);
     RUN_TEST(client_adapter_escapes_windows_paths_and_quotes);
-    RUN_TEST(client_adapter_opencode_sends_the_required_hook_event);
-    RUN_TEST(client_adapter_opencode_covers_lifecycle_read_and_compaction);
+    RUN_TEST(client_adapter_opencode_injects_cli_environment);
+    RUN_TEST(client_adapter_opencode_omits_mcp_hooks);
     RUN_TEST(client_adapter_rejects_missing_binary_path);
 }

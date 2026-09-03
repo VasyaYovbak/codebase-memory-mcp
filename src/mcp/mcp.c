@@ -29,6 +29,9 @@ enum {
     MCP_BFS_LIMIT_MAX = 5000,       /* hard ceiling for the limit param (context-bomb guard) */
     MCP_DEFAULT_IMPACT_LIMIT = 200, /* detect_changes per-symbol rows; rollup stays complete */
     MCP_SNIPPET_MAX_LINES = 500,    /* get_code_snippet line cap (whole-file Module guard) */
+    MCP_EXPLORE_SEARCH_DEFAULT_LIMIT = 20,
+    MCP_EXPLORE_SEARCH_MAX_LIMIT = 50,
+    MCP_EXPLORE_SEARCH_MAX_QUERIES = 8, /* baza: fixed CLI batch ceiling; use dynamic storage if needed */
     MCP_N_DEFAULTS_2 = 2,
     MCP_URI_PREFIX = 7,      /* strlen("file://") */
     MCP_CONTENT_PREFIX = 15, /* strlen("Content-Length:") */
@@ -558,6 +561,22 @@ static const tool_def_t TOOLS[] = {
      "\"type\":\"string\"},\"include_neighbors\":{"
      "\"type\":\"boolean\",\"default\":false}},\"required\":[\"qualified_name\",\"project\"]}"},
 
+    {"explore_search", "Explore search",
+     "Search the indexed codebase with the existing BM25 graph index and render concise results "
+     "grouped by file, like a terminal explorer. It is a read-only presentation layer over "
+     "search_graph's FTS index; source previews are bounded and only read from paths contained "
+     "within the project root. Use get_code_snippet for complete code and get_file_outline for "
+     "a complete declaration list.",
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},"
+     "\"query\":{\"type\":\"string\",\"minLength\":1,\"description\":\"Natural-language "
+     "or keyword query ranked by the existing BM25/FTS index.\"},\"queries\":{\"type\":\"array\","
+     "\"items\":{\"type\":\"string\",\"minLength\":1},\"minItems\":1,\"maxItems\":8,"
+     "\"description\":\"Independent queries; in the CLI, repeat --queries.\"},\"file_pattern\":{"
+     "\"type\":\"string\",\"description\":\"Optional file-path wildcard filter.\"},"
+     "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":50,\"default\":20}},"
+     "\"additionalProperties\":false,\"required\":[\"project\"],\"anyOf\":[{\"required\":[\"query\"]},"
+     "{\"required\":[\"queries\"]}]}"},
+
     {"get_file_outline", "Get file outline",
      "Return a compact declaration outline for one exact repository-relative file. Results are "
      "filtered by optional exact labels, ordered deterministically by source position, and "
@@ -756,7 +775,7 @@ typedef struct {
 /* Tool annotations are deliberately explicit. All tools operate on the local
  * repository/index domain, so none cross an open-world trust boundary.
  *
- * The ten pure query tools resolve their store through resolve_store(), whose
+ * The query tools resolve their store through resolve_store(), whose
  * query-only path is strictly non-mutating: a corrupt database is reported and
  * left in place, never quarantined or rebuilt — quarantine/rebuild is reserved
  * for write-side opens (index_repository, manage_adr writes). That is what
@@ -765,6 +784,7 @@ typedef struct {
 static const tool_annotation_def_t TOOL_ANNOTATIONS[] = {
     {"index_repository", false, false, true, false},
     {"search_graph", true, false, true, false},
+    {"explore_search", true, false, true, false},
     {"query_graph", true, false, true, false},
     {"trace_path", true, false, true, false},
     {"get_code_snippet", true, false, true, false},
@@ -832,13 +852,13 @@ static void mcp_add_tool_def(yyjson_mut_doc *doc, yyjson_mut_val *tools, int i) 
 
 static bool mcp_tool_allowed(cbm_mcp_tool_profile_t profile, const char *name) {
     static const char *const analysis_tools[] = {
-        "search_graph",     "query_graph",      "trace_path",     "get_code_snippet",
+        "search_graph",     "explore_search",   "query_graph",      "trace_path",     "get_code_snippet",
         "get_file_outline", "get_graph_schema", "compare_graphs", "get_architecture",
         "search_code",      "list_projects",    "index_status",   "check_index_coverage",
         "detect_changes",
     };
     static const char *const scout_tools[] = {
-        "search_graph",     "trace_path",    "get_code_snippet", "get_file_outline",
+        "search_graph",     "explore_search", "trace_path",    "get_code_snippet", "get_file_outline",
         "get_architecture", "list_projects", "index_status",     "check_index_coverage",
     };
     if (!name) {
@@ -10875,6 +10895,483 @@ static char *search_code_scan_error(search_scratch_t *scratch, const char *outpu
     return cbm_mcp_text_result(message, true);
 }
 
+typedef struct {
+    const char *qualified_name;
+    const char *label;
+    const char *file_path;
+    const char *lines;
+    double rank;
+    unsigned int query_matches;
+} explore_search_row_t;
+
+typedef struct {
+    const char *file_path;
+    int count;
+    unsigned int query_matches;
+} explore_search_file_t;
+
+static int explore_search_line_start(const char *lines);
+
+static int explore_search_row_cmp(const void *left, const void *right) {
+    const explore_search_row_t *a = left;
+    const explore_search_row_t *b = right;
+    if (a->query_matches != b->query_matches) {
+        return a->query_matches > b->query_matches ? -1 : 1;
+    }
+    if (a->rank != b->rank) {
+        return a->rank < b->rank ? -1 : 1;
+    }
+    int file_cmp = strcmp(a->file_path, b->file_path);
+    if (file_cmp != 0) {
+        return file_cmp;
+    }
+    int line_cmp = explore_search_line_start(a->lines) - explore_search_line_start(b->lines);
+    return line_cmp != 0 ? line_cmp : strcmp(a->qualified_name, b->qualified_name);
+}
+
+static void explore_search_free_results(yyjson_doc *docs[], char *jsons[], int count) {
+    for (int i = 0; i < count; i++) {
+        if (docs[i]) {
+            yyjson_doc_free(docs[i]);
+        }
+        free(jsons[i]);
+    }
+}
+
+static int explore_search_line_start(const char *lines) {
+    if (!lines) {
+        return INT_MAX;
+    }
+    char *end = NULL;
+    long line = strtol(lines, &end, 10);
+    return end != lines && line > 0 && line <= INT_MAX ? (int)line : INT_MAX;
+}
+
+static const char *explore_search_icon(const char *label) {
+    if (label && (strcmp(label, "Function") == 0 || strcmp(label, "Method") == 0)) {
+        return "ƒ";
+    }
+    if (label && (strcmp(label, "Class") == 0 || strcmp(label, "Interface") == 0)) {
+        return "◇";
+    }
+    if (label && strcmp(label, "Section") == 0) {
+        return "§";
+    }
+    if (label && strcmp(label, "Route") == 0) {
+        return "↪";
+    }
+    return "·";
+}
+
+static void explore_search_append_preview(cbm_sb_t *sb, const char *root_path,
+                                          const explore_search_row_t *row) {
+    int start = explore_search_line_start(row->lines);
+    if (!root_path || !row->file_path || start == INT_MAX || start > INT_MAX - 7) {
+        return;
+    }
+
+    int end = start + 7;
+    char *abs_path = NULL;
+    char *source = resolve_snippet_source(root_path, row->file_path, start, end, &abs_path);
+    free(abs_path);
+    if (!source) {
+        return;
+    }
+    char *safe_source = sanitize_utf8_lossy(source);
+    free(source);
+    if (!safe_source) {
+        return;
+    }
+
+    char *cursor = safe_source;
+    int emitted = 0;
+    while (*cursor && emitted < 3) {
+        char *next = strchr(cursor, '\n');
+        if (next) {
+            *next = '\0';
+        }
+        char *text = cursor;
+        while (*text && isspace((unsigned char)*text)) {
+            text++;
+        }
+        size_t length = strlen(text);
+        while (length > 0 && isspace((unsigned char)text[length - 1])) {
+            length--;
+        }
+        if (length > 0) {
+            bool truncated = length > 120;
+            size_t shown = truncated ? 120 : length;
+            while (shown > 0 && ((unsigned char)text[shown] & 0xC0U) == 0x80U) {
+                shown--;
+            }
+            char preview[121];
+            memcpy(preview, text, shown);
+            preview[shown] = '\0';
+            cbm_sb_append(sb, "    ");
+            cbm_sb_append(sb, preview);
+            cbm_sb_append(sb, truncated ? "...\n" : "\n");
+            emitted++;
+        }
+        if (!next) {
+            break;
+        }
+        cursor = next + 1;
+    }
+    free(safe_source);
+}
+
+static char *handle_explore_search(cbm_mcp_server_t *srv, const char *args) {
+    char *project = get_project_arg(args);
+    char *query = cbm_mcp_get_string_arg(args, "query");
+    char *file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
+    int limit = cbm_mcp_get_int_arg(args, "limit", MCP_EXPLORE_SEARCH_DEFAULT_LIMIT);
+
+    if (!project) {
+        free(query);
+        free(file_pattern);
+        return cbm_mcp_text_result("project is required", true);
+    }
+    if (limit < 1 || limit > MCP_EXPLORE_SEARCH_MAX_LIMIT) {
+        free(project);
+        free(query);
+        free(file_pattern);
+        return cbm_mcp_text_result("limit must be between 1 and 50", true);
+    }
+
+    yyjson_doc *query_doc = yyjson_read(args, strlen(args), 0);
+    yyjson_val *query_root = query_doc ? yyjson_doc_get_root(query_doc) : NULL;
+    yyjson_val *query_arg = query_root ? yyjson_obj_get(query_root, "query") : NULL;
+    yyjson_val *queries_arg = query_root ? yyjson_obj_get(query_root, "queries") : NULL;
+    const char *queries[MCP_EXPLORE_SEARCH_MAX_QUERIES];
+    int query_count = 0;
+    bool multi_query = queries_arg != NULL;
+    if (!query_root || (query_arg && !yyjson_is_str(query_arg)) ||
+        (queries_arg && !yyjson_is_arr(queries_arg)) || (query && queries_arg)) {
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        free(file_pattern);
+        return cbm_mcp_text_result("provide query or queries, not both", true);
+    }
+    if (queries_arg) {
+        size_t index = 0;
+        size_t max = 0;
+        yyjson_val *value;
+        yyjson_arr_foreach(queries_arg, index, max, value) {
+            const char *text = yyjson_is_str(value) ? yyjson_get_str(value) : NULL;
+            if (!text || !text[0] || query_count == MCP_EXPLORE_SEARCH_MAX_QUERIES) {
+                yyjson_doc_free(query_doc);
+                free(project);
+                free(query);
+                free(file_pattern);
+                return cbm_mcp_text_result("queries must contain 1 to 8 non-empty strings", true);
+            }
+            queries[query_count++] = text;
+        }
+        if (query_count == 0) {
+            yyjson_doc_free(query_doc);
+            free(project);
+            free(query);
+            free(file_pattern);
+            return cbm_mcp_text_result("queries must contain 1 to 8 non-empty strings", true);
+        }
+    } else if (query && query[0]) {
+        queries[query_count++] = query;
+    }
+    if (query_count == 0) {
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        free(file_pattern);
+        return cbm_mcp_text_result("query or queries is required", true);
+    }
+
+    cbm_store_t *store = resolve_store(srv, project);
+    if (!store) {
+        char *error = build_project_list_error("project not found or not indexed");
+        char *result = cbm_mcp_text_result(error, true);
+        free(error);
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        free(file_pattern);
+        return result;
+    }
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        free(file_pattern);
+        return not_indexed;
+    }
+
+    yyjson_doc *result_docs[MCP_EXPLORE_SEARCH_MAX_QUERIES] = {0};
+    char *search_jsons[MCP_EXPLORE_SEARCH_MAX_QUERIES] = {0};
+    int rows_cap = limit * query_count;
+    explore_search_row_t *rows = calloc((size_t)rows_cap, sizeof(*rows));
+    if (rows_cap > 0 && !rows) {
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        free(file_pattern);
+        return cbm_mcp_text_result("explore_search output allocation failed", true);
+    }
+
+    int row_count = 0;
+    int total = 0;
+    int raw_hits = 0;
+    for (int query_index = 0; query_index < query_count; query_index++) {
+        search_jsons[query_index] =
+            bm25_search(store, project, queries[query_index], file_pattern, limit, 0, false);
+        if (!search_jsons[query_index]) {
+            explore_search_free_results(result_docs, search_jsons, query_count);
+            yyjson_doc_free(query_doc);
+            free(rows);
+            free(project);
+            free(query);
+            free(file_pattern);
+            return cbm_mcp_text_result(
+                "explore_search requires an FTS5-enabled index and non-empty queries", true);
+        }
+
+        result_docs[query_index] = yyjson_read(search_jsons[query_index],
+                                               strlen(search_jsons[query_index]), 0);
+        yyjson_val *root = result_docs[query_index] ? yyjson_doc_get_root(result_docs[query_index]) : NULL;
+        yyjson_val *json_rows = root ? yyjson_obj_get(root, "rows") : NULL;
+        if (!json_rows || !yyjson_is_arr(json_rows)) {
+            explore_search_free_results(result_docs, search_jsons, query_count);
+            yyjson_doc_free(query_doc);
+            free(rows);
+            free(project);
+            free(query);
+            free(file_pattern);
+            return cbm_mcp_text_result("explore_search could not decode BM25 results", true);
+        }
+        if (!multi_query) {
+            yyjson_val *json_total = yyjson_obj_get(root, "total");
+            if (json_total && yyjson_is_int(json_total)) {
+                total = (int)yyjson_get_sint(json_total);
+            }
+        }
+
+        size_t index = 0;
+        size_t max = 0;
+        yyjson_val *json_row;
+        yyjson_arr_foreach(json_rows, index, max, json_row) {
+            if (!yyjson_is_arr(json_row)) {
+                continue;
+            }
+            yyjson_val *qualified_name = yyjson_arr_get(json_row, 0);
+            yyjson_val *label = yyjson_arr_get(json_row, 1);
+            yyjson_val *file_path = yyjson_arr_get(json_row, 2);
+            yyjson_val *lines = yyjson_arr_get(json_row, 3);
+            yyjson_val *rank = yyjson_arr_get(json_row, 4);
+            if (!qualified_name || !label || !file_path || !lines || !rank ||
+                !yyjson_is_str(qualified_name) || !yyjson_is_str(label) || !yyjson_is_str(file_path) ||
+                !yyjson_is_str(lines)) {
+                continue;
+            }
+            raw_hits++;
+            double row_rank = yyjson_get_real(rank);
+            int existing = 0;
+            while (existing < row_count &&
+                   (strcmp(rows[existing].file_path, yyjson_get_str(file_path)) != 0 ||
+                    strcmp(rows[existing].lines, yyjson_get_str(lines)) != 0)) {
+                existing++;
+            }
+            if (existing < row_count) {
+                rows[existing].query_matches++;
+                if (row_rank < rows[existing].rank) {
+                    rows[existing] = (explore_search_row_t){
+                        .qualified_name = yyjson_get_str(qualified_name),
+                        .label = yyjson_get_str(label),
+                        .file_path = yyjson_get_str(file_path),
+                        .lines = yyjson_get_str(lines),
+                        .rank = row_rank,
+                        .query_matches = rows[existing].query_matches,
+                    };
+                }
+            } else {
+                rows[row_count++] = (explore_search_row_t){
+                    .qualified_name = yyjson_get_str(qualified_name),
+                    .label = yyjson_get_str(label),
+                    .file_path = yyjson_get_str(file_path),
+                    .lines = yyjson_get_str(lines),
+                    .rank = row_rank,
+                    .query_matches = 1,
+                };
+            }
+        }
+    }
+    free(file_pattern);
+    int unique_total = row_count;
+    if (multi_query && row_count > 1) {
+        qsort(rows, (size_t)row_count, sizeof(*rows), explore_search_row_cmp);
+    }
+    if (multi_query && row_count > limit) {
+        row_count = limit;
+    }
+
+    explore_search_file_t *files = calloc((size_t)row_count, sizeof(*files));
+    int *row_files = calloc((size_t)row_count, sizeof(*row_files));
+    bool *file_emitted = calloc((size_t)row_count, sizeof(*file_emitted));
+    bool *row_emitted = calloc((size_t)row_count, sizeof(*row_emitted));
+    if ((row_count > 0 && (!files || !row_files || !file_emitted || !row_emitted))) {
+        free(row_emitted);
+        free(file_emitted);
+        free(row_files);
+        free(files);
+        free(rows);
+        explore_search_free_results(result_docs, search_jsons, query_count);
+        yyjson_doc_free(query_doc);
+        free(project);
+        free(query);
+        return cbm_mcp_text_result("explore_search output allocation failed", true);
+    }
+
+    int file_count = 0;
+    for (int i = 0; i < row_count; i++) {
+        int file_index = 0;
+        while (file_index < file_count && strcmp(files[file_index].file_path, rows[i].file_path) != 0) {
+            file_index++;
+        }
+        if (file_index == file_count) {
+            files[file_count++] =
+                (explore_search_file_t){.file_path = rows[i].file_path, .count = 0, .query_matches = 0};
+        }
+        files[file_index].count++;
+        files[file_index].query_matches += rows[i].query_matches;
+        row_files[i] = file_index;
+    }
+
+    char *root_path = get_project_root(srv, project);
+    cbm_sb_t output;
+    cbm_sb_init(&output);
+    char summary[128];
+    if (multi_query) {
+        if (unique_total > row_count) {
+            snprintf(summary, sizeof(summary),
+                     "🔍 Smart Search: %d queries → %d unique results shown of %d (BM25 search, %d raw hits)\n",
+                     query_count, row_count, unique_total, raw_hits);
+        } else {
+            snprintf(summary, sizeof(summary),
+                     "🔍 Smart Search: %d queries → %d unique results (BM25 search, %d raw hits)\n",
+                     query_count, row_count, raw_hits);
+        }
+        cbm_sb_append(&output, summary);
+        for (int i = 0; i < query_count; i++) {
+            snprintf(summary, sizeof(summary), "   %d: \"%s\"\n", i + 1, queries[i]);
+            cbm_sb_append(&output, summary);
+        }
+        cbm_sb_append(&output, "\n");
+    } else {
+        cbm_sb_append(&output, "🔍 Smart Search: \"");
+        cbm_sb_append(&output, query);
+        cbm_sb_append(&output, "\"\n");
+        if (total > row_count) {
+            snprintf(summary, sizeof(summary), "   %d matches shown of %d (BM25 search)\n\n", row_count,
+                     total);
+        } else {
+            snprintf(summary, sizeof(summary), "   %d matches (BM25 search)\n\n", row_count);
+        }
+        cbm_sb_append(&output, summary);
+    }
+    yyjson_doc_free(query_doc);
+
+    if (row_count == 0) {
+        cbm_sb_append(&output, "   No matches found.\n\n");
+    } else {
+        cbm_sb_append(&output, "── Results by File ──\n\n");
+        for (int rendered_files = 0; rendered_files < file_count; rendered_files++) {
+            int best_file = -1;
+            for (int i = 0; i < file_count; i++) {
+                if (file_emitted[i]) {
+                    continue;
+                }
+                bool better_file = best_file < 0;
+                if (!better_file && multi_query &&
+                    files[i].query_matches != files[best_file].query_matches) {
+                    better_file = files[i].query_matches > files[best_file].query_matches;
+                }
+                if (!better_file &&
+                    (!multi_query || files[i].query_matches == files[best_file].query_matches) &&
+                    files[i].count != files[best_file].count) {
+                    better_file = files[i].count > files[best_file].count;
+                }
+                if (!better_file && files[i].count == files[best_file].count &&
+                    (!multi_query ||
+                     files[i].query_matches == files[best_file].query_matches)) {
+                    better_file = strcmp(files[i].file_path, files[best_file].file_path) < 0;
+                }
+                if (better_file) {
+                    best_file = i;
+                }
+            }
+            file_emitted[best_file] = true;
+            snprintf(summary, sizeof(summary), "📁 %s (%d match%s)\n", files[best_file].file_path,
+                     files[best_file].count, files[best_file].count == 1 ? "" : "es");
+            cbm_sb_append(&output, summary);
+
+            for (int rendered_rows = 0; rendered_rows < files[best_file].count; rendered_rows++) {
+                int best_row = -1;
+                for (int i = 0; i < row_count; i++) {
+                    if (row_emitted[i] || row_files[i] != best_file) {
+                        continue;
+                    }
+                    bool better_row = best_row < 0;
+                    if (!better_row && multi_query) {
+                        better_row = explore_search_row_cmp(&rows[i], &rows[best_row]) < 0;
+                    }
+                    if (!better_row && !multi_query &&
+                        (explore_search_line_start(rows[i].lines) <
+                             explore_search_line_start(rows[best_row].lines) ||
+                         (explore_search_line_start(rows[i].lines) ==
+                              explore_search_line_start(rows[best_row].lines) &&
+                          strcmp(rows[i].qualified_name, rows[best_row].qualified_name) < 0))) {
+                        better_row = true;
+                    }
+                    if (better_row) {
+                        best_row = i;
+                    }
+                }
+                row_emitted[best_row] = true;
+                const char *name = strrchr(rows[best_row].qualified_name, '.');
+                name = name ? name + 1 : rows[best_row].qualified_name;
+                if (multi_query) {
+                    snprintf(summary, sizeof(summary), "  %s %s %s [%u/%d]\n",
+                             explore_search_icon(rows[best_row].label), name, rows[best_row].lines,
+                             rows[best_row].query_matches, query_count);
+                } else {
+                    snprintf(summary, sizeof(summary), "  %s %s %s\n",
+                             explore_search_icon(rows[best_row].label), name, rows[best_row].lines);
+                }
+                cbm_sb_append(&output, summary);
+                explore_search_append_preview(&output, root_path, &rows[best_row]);
+            }
+            cbm_sb_append(&output, "\n");
+        }
+    }
+    cbm_sb_append(&output, "── Actions ──\n");
+    cbm_sb_append(&output, "  To see full code: use get_code_snippet with qualified_name\n");
+    cbm_sb_append(&output, "  To see file structure: use get_file_outline with file_path\n");
+    cbm_sb_append(&output, "  To reindex: use index_repository\n");
+
+    char *text = cbm_sb_finish(&output);
+    char *result = cbm_mcp_text_result(text ? text : "explore_search output allocation failed", text == NULL);
+    free(text);
+    free(root_path);
+    free(row_emitted);
+    free(file_emitted);
+    free(row_files);
+    free(files);
+    free(rows);
+    explore_search_free_results(result_docs, search_jsons, query_count);
+    free(project);
+    free(query);
+    return result;
+}
+
 static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char *pattern = cbm_mcp_get_string_arg(args, "pattern");
     char *project = get_project_arg(args);
@@ -12703,6 +13200,9 @@ static char *dispatch_tool(cbm_mcp_server_t *srv, const char *tool_name, const c
     }
     if (strcmp(tool_name, "search_graph") == 0) {
         return handle_search_graph(srv, args_json);
+    }
+    if (strcmp(tool_name, "explore_search") == 0) {
+        return handle_explore_search(srv, args_json);
     }
     if (strcmp(tool_name, "query_graph") == 0) {
         return handle_query_graph(srv, args_json);

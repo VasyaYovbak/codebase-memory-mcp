@@ -2380,6 +2380,11 @@ TEST(cli_skill_files_content) {
     /* Exploring capabilities */
     ASSERT(strstr(sk[0].content, "search_graph") != NULL);
     ASSERT(strstr(sk[0].content, "get_graph_schema") != NULL);
+    ASSERT(strstr(sk[0].content, "Codex and OpenCode CLI") != NULL);
+    ASSERT(strstr(sk[0].content, "$CBM") != NULL);
+    ASSERT(strstr(sk[0].content, "explore_search") != NULL);
+    ASSERT(strstr(sk[0].content, "get_file_outline") != NULL);
+    ASSERT(strstr(sk[0].content, "compare_graphs") != NULL);
 
     /* Tracing capabilities */
     ASSERT(strstr(sk[0].content, "trace_path") != NULL);
@@ -2393,7 +2398,7 @@ TEST(cli_skill_files_content) {
     /* Reference capabilities */
     ASSERT(strstr(sk[0].content, "query_graph") != NULL);
     ASSERT(strstr(sk[0].content, "Cypher") != NULL);
-    ASSERT(strstr(sk[0].content, "15 MCP Tools") != NULL);
+    ASSERT(strstr(sk[0].content, "18 CBM Tools") != NULL);
 
     /* Gotchas section */
     ASSERT(strstr(sk[0].content, "Gotchas") != NULL);
@@ -2405,7 +2410,8 @@ TEST(cli_codex_instructions) {
     /* Port of TestCodexInstructionsCreation */
     const char *instr = cbm_get_codex_instructions();
     ASSERT_NOT_NULL(instr);
-    ASSERT(strstr(instr, "Codebase Knowledge Graph") != NULL);
+    ASSERT(strstr(instr, "Codebase Memory CLI") != NULL);
+    ASSERT(strstr(instr, "$CBM") != NULL);
     ASSERT(strstr(instr, "trace_path") != NULL);
     PASS();
 }
@@ -5170,7 +5176,7 @@ TEST(cli_existing_agents_install_durable_child_context) {
     free(plan);
 
     cbm_install_agent_configs(tmpdir, "/usr/local/bin/codebase-memory-mcp", false, false);
-    const char *const durable[] = {"Codebase Memory", "search_graph", "trace_path", "grep"};
+    const char *const durable[] = {"Codebase Memory", "search_graph", "trace_path", "grep", "$CBM"};
     bool files_ok = true;
     snprintf(path, sizeof(path), "%s/.openclaw/workspace/AGENTS.md", tmpdir);
     files_ok = files_ok && test_file_contains_all(path, durable, 4);
@@ -5183,7 +5189,13 @@ TEST(cli_existing_agents_install_durable_child_context) {
     snprintf(path, sizeof(path), "%s/.kiro/steering/codebase-memory.md", tmpdir);
     files_ok = files_ok && test_file_contains_all(path, durable, 4);
     snprintf(path, sizeof(path), "%s/.config/opencode/AGENTS.md", tmpdir);
-    files_ok = files_ok && test_file_contains_all(path, durable, 4);
+    files_ok = files_ok && test_file_contains_all(path, durable, 5);
+    snprintf(path, sizeof(path), "%s/.config/opencode/opencode.json", tmpdir);
+    struct stat state;
+    files_ok = files_ok && stat(path, &state) != 0;
+    snprintf(path, sizeof(path), "%s/.config/opencode/plugins/cbm-augment.ts", tmpdir);
+    const char *const opencode_cli[] = {"shell.env", "output.env.CBM", " cli'"};
+    files_ok = files_ok && test_file_contains_all(path, opencode_cli, 3);
 #ifdef _WIN32
     snprintf(path, sizeof(path), "%s/AppData/Roaming/Zed/AGENTS.md", tmpdir);
 #else
@@ -5849,10 +5861,9 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
     write_test_file(auditor_path, rc1_auditor);
     free(rc1_auditor);
 
-    /* Uninstall renders expected content with the installed binary path, so
-     * install with that same path to exercise exact-content removal. */
+    /* CLI-first installation retires only CBM-owned MCP profiles. */
     char installed_binary[640];
-    char expected_command[768];
+    char expected_environment[768];
 #ifdef _WIN32
     snprintf(installed_binary, sizeof(installed_binary), "%s/.local/bin/codebase-memory-mcp.exe",
              tmpdir);
@@ -5860,31 +5871,28 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
     snprintf(installed_binary, sizeof(installed_binary), "%s/.local/bin/codebase-memory-mcp",
              tmpdir);
 #endif
-    snprintf(expected_command, sizeof(expected_command), "command = \"%s\"", installed_binary);
+    snprintf(expected_environment, sizeof(expected_environment),
+             "set = { CBM = \"%s cli\" }", installed_binary);
     char *plan = cbm_build_install_plan_json(tmpdir, installed_binary);
     bool plan_ok =
-        plan && strstr(plan, scout_path) && strstr(plan, verify_path) && strstr(plan, auditor_path);
+        plan && !strstr(plan, scout_path) && !strstr(plan, verify_path) && !strstr(plan, auditor_path);
     free(plan);
 
     int install_rc = cbm_install_agent_configs(tmpdir, installed_binary, false, false);
     char *scout = read_test_file_alloc(scout_path);
     char *verify = read_test_file_alloc(verify_path);
     char *auditor = read_test_file_alloc(auditor_path);
-    bool installed =
-        install_rc != 0 && scout && strcmp(scout, foreign_scout) == 0 && verify &&
-        strcmp(verify, legacy_verify) != 0 && strstr(verify, "Tier 2") &&
-        strstr(verify, "name = \"codebase-memory\"") && strstr(verify, expected_command) &&
-        strstr(verify, "args = [\"--tool-profile=analysis\"]") &&
-        strstr(verify, "check_index_coverage") && auditor && strstr(auditor, expected_command) &&
-        strstr(auditor, "args = [\"--tool-profile=analysis\"]") && strstr(auditor, "Tier 3") &&
-        strstr(auditor, "check_index_coverage") && !strstr(verify, "index_repository") &&
-        !strstr(verify, "delete_project") && !strstr(verify, "manage_adr") &&
-        !strstr(verify, "ingest_traces") && !strstr(auditor, "index_repository") &&
-        !strstr(auditor, "delete_project") && !strstr(auditor, "manage_adr") &&
-        !strstr(auditor, "ingest_traces");
+    char config_path[768];
+    snprintf(config_path, sizeof(config_path), "%s/.codex/config.toml", tmpdir);
+    char *config = read_test_file_alloc(config_path);
+    struct stat state;
+    bool installed = install_rc == 0 && scout && strcmp(scout, foreign_scout) == 0 &&
+                     stat(verify_path, &state) != 0 && stat(auditor_path, &state) != 0 && config &&
+                     strstr(config, expected_environment) && !strstr(config, "mcp_servers.codebase-memory-mcp");
     free(scout);
     free(verify);
     free(auditor);
+    free(config);
 
     const char *modified_verify = "name = \"codebase-memory\"\nuser_note = \"preserve verify\"\n";
     write_test_file(verify_path, modified_verify);
@@ -5892,20 +5900,21 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
     int uninstall_rc = cli_test_cmd_uninstall(2, argv);
     scout = read_test_file_alloc(scout_path);
     verify = read_test_file_alloc(verify_path);
-    struct stat state;
+    config = read_test_file_alloc(config_path);
     bool ownership_safe = uninstall_rc == 0 && scout && strcmp(scout, foreign_scout) == 0 &&
                           verify && strcmp(verify, modified_verify) == 0 &&
-                          stat(auditor_path, &state) != 0;
+                          stat(auditor_path, &state) != 0 &&
+                          (!config || !strstr(config, "codebase-memory-mcp CLI"));
     free(scout);
     free(verify);
+    free(config);
 
     restore_test_env("HOME", saved_home);
     restore_test_env("PATH", saved_path);
     restore_test_env("CODEX_HOME", saved_codex);
     test_rmdir_r(tmpdir);
     if (!plan_ok || !installed || !ownership_safe)
-        FAIL(
-            "tiered Codex profiles must migrate exact legacy Verify bytes and preserve user files");
+        FAIL("Codex CLI migration must remove owned MCP profiles and preserve user files");
     PASS();
 }
 
@@ -11308,6 +11317,38 @@ TEST(cli_upsert_codex_mcp_fresh) {
     PASS();
 }
 
+TEST(cli_upsert_codex_cli_environment) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-env-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char configpath[512];
+    snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
+    ASSERT_EQ(cbm_upsert_codex_cli_environment("/usr/local/bin/codebase-memory-mcp", configpath),
+              0);
+
+    const char *data = read_test_file(configpath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "# >>> codebase-memory-mcp CLI >>>") != NULL);
+    ASSERT(strstr(data, "[shell_environment_policy]") != NULL);
+    ASSERT(strstr(data, "set = { CBM = \"/usr/local/bin/codebase-memory-mcp cli\" }") != NULL);
+    ASSERT_NULL(strstr(data, "mcp_servers.codebase-memory-mcp"));
+
+    char existing_policy[512];
+    snprintf(existing_policy, sizeof(existing_policy), "%s/existing.toml", tmpdir);
+    const char *policy = "[shell_environment_policy]\ninherit = \"all\"\n";
+    write_test_file(existing_policy, policy);
+    ASSERT(cbm_upsert_codex_cli_environment("/usr/local/bin/codebase-memory-mcp", existing_policy) !=
+           0);
+    data = read_test_file(existing_policy);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strcmp(data, policy) == 0);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 TEST(cli_upsert_codex_mcp_escapes_windows_path) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-winpath-XXXXXX");
@@ -11755,6 +11796,8 @@ TEST(cli_agent_instructions_content) {
     ASSERT(strstr(instr, "Verify (Tier 2, default)") != NULL);
     ASSERT(strstr(instr, "Auditor (Tier 3)") != NULL);
     ASSERT(strstr(instr, "check_index_coverage") != NULL);
+    ASSERT(strstr(instr, "$CBM explore_search") != NULL);
+    ASSERT(strstr(instr, "--queries") != NULL);
     ASSERT(strstr(instr, "missed-coverage range") != NULL);
     ASSERT(strstr(instr, "must not call or claim MCP access") != NULL);
     ASSERT(strstr(instr, "# Codebase Memory\n") != NULL);
@@ -13997,6 +14040,7 @@ SUITE(cli) {
 
     /* Codex MCP config upsert (3 tests — group B) */
     RUN_TEST(cli_upsert_codex_mcp_fresh);
+    RUN_TEST(cli_upsert_codex_cli_environment);
     RUN_TEST(cli_upsert_codex_mcp_escapes_windows_path);
     RUN_TEST(cli_upsert_codex_mcp_existing);
     RUN_TEST(cli_upsert_codex_mcp_replace);

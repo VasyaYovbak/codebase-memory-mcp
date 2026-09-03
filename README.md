@@ -43,18 +43,18 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 
 **One-line install** (macOS / Linux):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VasyaYovbak/codebase-memory-mcp/main/install.sh | bash
 ```
 
 With graph visualization UI:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VasyaYovbak/codebase-memory-mcp/main/install.sh | bash
 ```
 
 **Windows** (PowerShell):
 ```powershell
 # 1. Download the installer
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/VasyaYovbak/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
 
 # 2. (Optional but recommended) Inspect the script
 notepad install.ps1
@@ -84,7 +84,7 @@ Restart your coding agent. Say **"Index this project"** — done.
 <details>
 <summary>Manual install</summary>
 
-1. **Download** the archive for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
+1. **Download** the archive for your platform from the [latest release](https://github.com/VasyaYovbak/codebase-memory-mcp/releases/latest):
    - `codebase-memory-mcp-<os>-<arch>.tar.gz` (macOS/Linux) or `.zip` (Windows)
 
 2. **Extract and install** (each archive includes `install.sh` or `install.ps1`):
@@ -107,7 +107,7 @@ Restart your coding agent. Say **"Index this project"** — done.
 The `install` command automatically strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
 </details>
 
-The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported.
+The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported. Codex and OpenCode use the local one-shot CLI instead: their installed guidance uses `$CBM <tool>`, with `$CBM` already including `cli`.
 
 ### Session Coordination Daemon
 
@@ -334,13 +334,13 @@ Every release includes `checksums.txt` with SHA-256 hashes. The executable is se
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VasyaYovbak/codebase-memory-mcp/main/scripts/setup.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup-windows.ps1 | iex
+irm https://raw.githubusercontent.com/VasyaYovbak/codebase-memory-mcp/main/scripts/setup-windows.ps1 | iex
 ```
 
 </details>

@@ -1294,6 +1294,13 @@ static const char skill_content[] =
     "\n"
     "Graph tools return precise structural results in ~500 tokens vs ~80K for grep.\n"
     "\n"
+    "## Codex and OpenCode CLI\n"
+    "\n"
+    "`$CBM` is injected into every shell command and already includes `cli`. Use it unquoted as "
+    "`$CBM TOOL --flag value`; do not start the MCP server. `PROJECT` is the name returned by "
+    "`$CBM list_projects`. Read `tool(args)` below as `$CBM tool --kebab-case-flag value`. Use "
+    "`$CBM TOOL --help` for a tool's flags.\n"
+    "\n"
     "## Quick Decision Matrix\n"
     "\n"
     "| Question | Tool call |\n"
@@ -1358,11 +1365,11 @@ static const char skill_content[] =
     "- High fan-in: `search_graph(min_degree=10, relationship=\"CALLS\", "
     "direction=\"inbound\")`\n"
     "\n"
-    "## 15 MCP Tools\n"
+    "## 18 CBM Tools\n"
     "`index_repository`, `index_status`, `list_projects`, `delete_project`,\n"
-    "`search_graph`, `search_code`, `trace_path`, `detect_changes`,\n"
-    "`query_graph`, `get_graph_schema`, `get_code_snippet`, `get_architecture`,\n"
-    "`check_index_coverage`, `manage_adr`, `ingest_traces`\n"
+    "`explore_search`, `search_graph`, `search_code`, `get_file_outline`, `get_code_snippet`,\n"
+    "`trace_path`, `detect_changes`, `compare_graphs`, `query_graph`, `get_graph_schema`,\n"
+    "`get_architecture`, `check_index_coverage`, `manage_adr`, `ingest_traces`\n"
     "\n"
     "## Edge Types\n"
     "CALLS, HTTP_CALLS, ASYNC_CALLS, DATA_FLOWS, IMPORTS, DEFINES, DEFINES_METHOD,\n"
@@ -1389,18 +1396,17 @@ static const char skill_content[] =
     "5. `search_graph` results default to 50 per page — check `has_more` and use `offset`.\n";
 
 static const char codex_instructions_content[] =
-    "# Codebase Knowledge Graph\n"
+    "# Codebase Memory CLI\n"
     "\n"
     "This project uses codebase-memory-mcp to maintain a knowledge graph of the codebase.\n"
-    "Use the MCP tools to explore and understand the code:\n"
+    "`$CBM` is injected into shell commands and already includes `cli`; use it unquoted as "
+    "`$CBM TOOL --flag value`.\n"
     "\n"
-    "- `search_graph` — find functions, classes, routes by pattern\n"
-    "- `trace_path` — trace who calls a function or what it calls\n"
-    "- `get_code_snippet` — read function source code\n"
-    "- `query_graph` — run Cypher queries for complex patterns\n"
-    "- `get_architecture` — high-level project summary\n"
+    "Start with `$CBM list_projects`, then `$CBM explore_search --project PROJECT --query \"...\"`. "
+    "Use `$CBM search_graph` for definitions, `$CBM trace_path` for call paths, and "
+    "`$CBM get_code_snippet` for source.\n"
     "\n"
-    "Always prefer graph tools over grep for code discovery.\n";
+    "Prefer CLI graph tools over grep for code discovery.\n";
 
 /* Old skill names — cleaned up during install to remove stale directories. */
 static const char *old_skill_names[] = {
@@ -2903,7 +2909,11 @@ static const char agent_instructions_content[] =
     "## Codebase Knowledge Graph (codebase-memory-mcp)\n"
     "\n"
     "This project uses codebase-memory-mcp to maintain a knowledge graph of the codebase.\n"
-    "ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.\n"
+    "On Codex and OpenCode, `$CBM` is injected into shell commands and already includes `cli`. "
+    "Use it unquoted as `$CBM TOOL --flag value`; do not start the MCP server. Start with "
+    "`$CBM list_projects`, then `$CBM explore_search --project PROJECT --query \"...\"`. To run "
+    "independent searches and merge their results, repeat `--queries \"...\" --queries \"...\"`.\n"
+    "On other clients, prefer MCP graph tools over grep/glob/file-search for code discovery.\n"
     "\n"
     "### Priority Order\n"
     "1. `search_graph` — find functions, classes, routes, variables by pattern\n"
@@ -3457,6 +3467,8 @@ int cbm_remove_instructions(const char *path) {
 #define CODEX_CMM_SECTION "[" CODEX_CMM_TABLE "]"
 #define CODEX_MCP_BEGIN "# >>> codebase-memory-mcp MCP >>>"
 #define CODEX_MCP_END "# <<< codebase-memory-mcp MCP <<<"
+#define CODEX_CLI_BEGIN "# >>> codebase-memory-mcp CLI >>>"
+#define CODEX_CLI_END "# <<< codebase-memory-mcp CLI <<<"
 
 /* Remove the unmarked section emitted by releases before managed TOML blocks.
  * Managed configurations are left to config_toml_edit so marker validation
@@ -3513,6 +3525,35 @@ int cbm_remove_codex_mcp(const char *config_path) {
         return CLI_ERR;
     }
     return cbm_remove_codex_legacy_mcp(config_path) >= 0 ? CLI_OK : CLI_ERR;
+}
+
+int cbm_upsert_codex_cli_environment(const char *binary_path, const char *config_path) {
+    if (!binary_path || !binary_path[0] || !config_path || !config_path[0]) {
+        return CLI_ERR;
+    }
+    char command[CLI_BUF_8K];
+    int command_written = snprintf(command, sizeof(command), "%s cli", binary_path);
+    if (command_written < 0 || (size_t)command_written >= sizeof(command)) {
+        return CLI_ERR;
+    }
+    char escaped[CLI_BUF_8K];
+    if (cbm_toml_escape_basic_string(command, escaped, sizeof(escaped)) != 0) {
+        return CLI_ERR;
+    }
+    char block[CLI_BUF_8K];
+    int block_written = snprintf(block, sizeof(block),
+                                 "[shell_environment_policy]\n"
+                                 "set = { CBM = \"%s\" }\n",
+                                 escaped);
+    if (block_written < 0 || (size_t)block_written >= sizeof(block) ||
+        cbm_remove_codex_mcp(config_path) != CLI_OK) {
+        return CLI_ERR;
+    }
+    /* baza: preserve a user-owned shell_environment_policy rather than attempting a partial
+     * TOML merge; add table-aware map merging when Codex configuration needs that upgrade. */
+    return cbm_toml_upsert_managed_block(config_path, CODEX_CLI_BEGIN, CODEX_CLI_END, block) == 0
+               ? CLI_OK
+               : CLI_ERR;
 }
 
 static int cbm_remove_codex_mcp_owned(const char *binary_path, const char *config_path) {
@@ -3686,6 +3727,11 @@ int cbm_remove_opencode_mcp(const char *config_path) {
 int cbm_remove_opencode_mcp_owned(const char *binary_path, const char *config_path) {
     static const char *const path[] = {"mcp"};
     return cbm_remove_json_mcp(config_path, path, 1U, CBM_JSON_MCP_LOCAL_ARRAY, binary_path);
+}
+
+static int cbm_configure_opencode_cli(const char *binary_path, const char *config_path) {
+    (void)binary_path;
+    return cbm_remove_opencode_mcp(config_path);
 }
 
 static int cbm_upsert_kilo_mcp(const char *binary_path, const char *config_path) {
@@ -7866,6 +7912,35 @@ static bool install_generic_agent_config(const char *label, const char *binary_p
     return mcp_installed;
 }
 
+static bool install_cli_agent_config(const char *label, const char *binary_path,
+                                     const char *config_path, const char *instr_path, bool dry_run,
+                                     int (*configure_cli)(const char *, const char *)) {
+    if (g_install_plan) {
+        plan_record(label, "cli_config", config_path);
+        if (instr_path) {
+            plan_record(label, "instructions", instr_path);
+        }
+        return true;
+    }
+    printf("%s:\n", label);
+    bool cli_configured = true;
+    if (!dry_run &&
+        (!prepare_config_parent(config_path) || configure_cli(binary_path, config_path) != CLI_OK)) {
+        cli_configured = false;
+        record_agent_config_error(false, label, "cli_config_install", config_path);
+    }
+    printf("  cli configuration: %s\n", config_path);
+    if (instr_path) {
+        if (!dry_run &&
+            (!prepare_config_parent(instr_path) ||
+             cbm_upsert_instructions(instr_path, agent_instructions_content) != CLI_OK)) {
+            record_agent_config_error(false, label, "instructions_install", instr_path);
+        }
+        printf("  instructions: %s\n", instr_path);
+    }
+    return cli_configured;
+}
+
 static void install_windsurf_config(const char *binary_path, const char *config_path,
                                     const char *rules_path, bool dry_run) {
     if (g_install_plan) {
@@ -8838,23 +8913,25 @@ static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const
                 reason);
             goto codex_install_done;
         }
-        install_generic_agent_config("Codex CLI", binary_path, cp, ip, dry_run,
-                                     cbm_upsert_codex_mcp);
+        install_cli_agent_config("Codex CLI", binary_path, cp, ip, dry_run,
+                                 cbm_upsert_codex_cli_environment);
         install_agent_skill("Codex CLI", skills_dir, force, dry_run);
-        install_tiered_agent_profiles(
-            (cbm_tiered_profile_set_t){
-                .label = "Codex CLI",
-                .verify_path = ap,
-                .binary_path = binary_path,
-                .legacy_verify_content = legacy_codex_verify_agent_content,
-                .dialect = CBM_GRAPH_DIALECT_CODEX,
-            },
-            dry_run);
+        if (!g_install_plan) {
+            uninstall_tiered_agent_profiles(
+                (cbm_tiered_profile_set_t){
+                    .label = "Codex CLI",
+                    .verify_path = ap,
+                    .binary_path = binary_path,
+                    .legacy_verify_content = legacy_codex_verify_agent_content,
+                    .dialect = CBM_GRAPH_DIALECT_CODEX,
+                },
+                dry_run);
+        }
         /* Choose the hook target: if ~/.codex/hooks.json already exists, the
          * user manages Codex hooks via the JSON representation — write the
          * SessionStart reminder there instead of config.toml. Writing both
          * makes Codex warn about loading hooks from two representations (#570).
-         * config.toml remains the mcp_config target above either way. */
+         * config.toml remains the CLI environment target above either way. */
         const char *hook_target = use_hooks_json ? hooks_json : cp;
         if (g_install_plan) {
             plan_record("Codex CLI", "hook", hook_target);
@@ -8891,23 +8968,21 @@ static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const
         snprintf(ip, sizeof(ip), "%s/.config/opencode/AGENTS.md", home);
         snprintf(skills_dir, sizeof(skills_dir), "%s/.config/opencode/skills", home);
         snprintf(ap, sizeof(ap), "%s/.config/opencode/agents/codebase-memory.md", home);
-        install_generic_agent_config("OpenCode", binary_path, cp, ip, dry_run,
-                                     cbm_upsert_opencode_mcp);
+        install_cli_agent_config("OpenCode", binary_path, cp, ip, dry_run,
+                                 cbm_configure_opencode_cli);
         install_agent_skill("OpenCode", skills_dir, force, dry_run);
-        install_tiered_agent_profiles(
-            (cbm_tiered_profile_set_t){
-                .label = "OpenCode",
-                .verify_path = ap,
-                .binary_path = binary_path,
-                .legacy_verify_content = legacy_opencode_verify_agent_content,
-                .dialect = CBM_GRAPH_DIALECT_OPENCODE,
-            },
-            dry_run);
-        /* OpenCode already reaches every tool over MCP (installed just above),
-         * so this adds no tools -- only the automatic graph lookup before a
-         * grep/glob that other clients get from their own hook configuration.
-         * OpenCode has no such configuration; a plugin module is its only
-         * extension point (verified against their plugin documentation). */
+        if (!g_install_plan) {
+            uninstall_tiered_agent_profiles(
+                (cbm_tiered_profile_set_t){
+                    .label = "OpenCode",
+                    .verify_path = ap,
+                    .binary_path = binary_path,
+                    .legacy_verify_content = legacy_opencode_verify_agent_content,
+                    .dialect = CBM_GRAPH_DIALECT_OPENCODE,
+                },
+                dry_run);
+        }
+        /* OpenCode's documented plugin hook injects CBM into every shell command. */
         char plugin_path[CLI_BUF_1K];
         snprintf(plugin_path, sizeof(plugin_path), "%s/.config/opencode/plugins/cbm-augment.ts",
                  home);
@@ -11224,6 +11299,10 @@ static void uninstall_cli_agents(const cbm_detected_agents_t *agents, const char
         }
         uninstall_agent_mcp_instr((mcp_uninstall_args_t){"Codex CLI", cp, ip}, dry_run,
                                   cbm_remove_codex_mcp_owned);
+        if (!dry_run &&
+            cbm_toml_remove_managed_block(cp, CODEX_CLI_BEGIN, CODEX_CLI_END) != CLI_OK) {
+            record_agent_config_error(true, "Codex CLI", "cli_config_uninstall", cp);
+        }
         if (!dry_run &&
             cbm_reconcile_codex_hooks_command(cp, hook_command, hook_command_windows,
                                               CBM_TOML_CODEX_HOOK_REMOVE, false) != CLI_OK) {

@@ -934,7 +934,7 @@ TEST(mcp_tools_have_behavior_annotations) {
         bool open_world;
     } expected[] = {
         {"index_repository", false, false, true, false},
-        /* The ten query tools resolve their store through the strictly
+        /* These query tools resolve their store through the strictly
          * non-mutating query-only path: a corrupt database is reported and
          * left in place, never quarantined or rebuilt. Quarantine/rebuild is
          * a write-side job (index_repository, manage_adr writes), so the
@@ -942,6 +942,7 @@ TEST(mcp_tools_have_behavior_annotations) {
          * these tools. get_file_outline arrived after this split and keeps
          * its upstream conservative annotation. */
         {"search_graph", true, false, true, false},
+        {"explore_search", true, false, true, false},
         {"query_graph", true, false, true, false},
         {"trace_path", true, false, true, false},
         {"get_code_snippet", true, false, true, false},
@@ -1494,7 +1495,7 @@ TEST(server_handle_analysis_profile_filters_and_rejects_mutators) {
     resp = cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":220,\"method\":\"tools/list\"}");
     ASSERT_NOT_NULL(resp);
     static const char *const analysis_tools[] = {
-        "search_graph",     "query_graph",      "trace_path",     "get_code_snippet",
+        "search_graph",     "explore_search",   "query_graph",      "trace_path",     "get_code_snippet",
         "get_file_outline", "get_graph_schema", "compare_graphs", "get_architecture",
         "search_code",      "list_projects",    "index_status",   "check_index_coverage",
         "detect_changes",
@@ -1536,8 +1537,9 @@ TEST(server_handle_scout_profile_exposes_only_the_fast_tier) {
 
     resp = cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":223,\"method\":\"tools/list\"}");
     ASSERT_NOT_NULL(resp);
-    ASSERT_EQ(mcp_response_tool_count(resp), 8U);
+    ASSERT_EQ(mcp_response_tool_count(resp), 9U);
     ASSERT_TRUE(mcp_response_has_exact_tool(resp, "search_graph"));
+    ASSERT_TRUE(mcp_response_has_exact_tool(resp, "explore_search"));
     ASSERT_TRUE(mcp_response_has_exact_tool(resp, "trace_path"));
     ASSERT_TRUE(mcp_response_has_exact_tool(resp, "get_code_snippet"));
     ASSERT_TRUE(mcp_response_has_exact_tool(resp, "get_file_outline"));
@@ -13737,6 +13739,52 @@ static char *prose_search(cbm_mcp_server_t *srv, const char *proj, const char *q
     return inner;
 }
 
+TEST(explore_search_groups_bm25_results) {
+    const char *proj = "explore-search-test";
+    cbm_mcp_server_t *srv = setup_prose_search_server(proj);
+    ASSERT_NOT_NULL(srv);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":520,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"explore_search\",\"arguments\":{"
+             "\"project\":\"explore-search-test\",\"query\":\"ephemeral\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *text = extract_text_content(resp);
+    free(resp);
+    ASSERT_NOT_NULL(text);
+    ASSERT_NOT_NULL(strstr(text, "Smart Search: \"ephemeral\""));
+    ASSERT_NOT_NULL(strstr(text, "Results by File"));
+    ASSERT_NOT_NULL(strstr(text, "README.md (1 match)"));
+    ASSERT_NOT_NULL(strstr(text, "Installation 1-20"));
+    ASSERT_NOT_NULL(strstr(text, "get_file_outline"));
+    free(text);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(explore_search_accepts_multiple_queries) {
+    cbm_mcp_server_t *srv = setup_prose_search_server("explore-search-multi");
+    ASSERT_NOT_NULL(srv);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":521,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"explore_search\",\"arguments\":{"
+             "\"project\":\"explore-search-multi\",\"queries\":[\"ephemeral\",\"runner\",\"shard\"]}}}");
+    ASSERT_NOT_NULL(resp);
+    char *text = extract_text_content(resp);
+    free(resp);
+    ASSERT_NOT_NULL(text);
+    ASSERT_NOT_NULL(strstr(text, "3 queries → 2 unique results (BM25 search, 3 raw hits)"));
+    ASSERT_NOT_NULL(strstr(text, "1: \"ephemeral\""));
+    ASSERT_NOT_NULL(strstr(text, "README.md (1 match)"));
+    ASSERT_NOT_NULL(strstr(text, "action.yml (1 match)"));
+    ASSERT_NOT_NULL(strstr(text, "Installation 1-20 [2/3]"));
+    ASSERT_NOT_NULL(strstr(text, "action_yml 1-40 [1/3]"));
+    free(text);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 TEST(bm25_finds_section_by_its_prose_issue518) {
     cbm_mcp_server_t *srv = setup_prose_search_server("prose518");
     ASSERT_NOT_NULL(srv);
@@ -13908,6 +13956,8 @@ TEST(bm25_searches_legacy_four_column_fts_without_error_issue518) {
 
 SUITE(mcp) {
     /* #518/#519 — BM25 prose search */
+    RUN_TEST(explore_search_groups_bm25_results);
+    RUN_TEST(explore_search_accepts_multiple_queries);
     RUN_TEST(bm25_finds_section_by_its_prose_issue518);
     RUN_TEST(bm25_finds_module_by_promoted_description_issue519);
     RUN_TEST(bm25_results_and_total_stay_consistent_issue518);
