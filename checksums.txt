@@ -1,1 +1,1 @@
-441bff0634c139a21fc8997cd0e43c1764cfe0e00682981e1510eccc7f4a81f5  codebase-memory-mcp-linux-amd64-portable.tar.gz
+4c36ddaf8119641b559913a58e5792f35c3750f7e5fb295c18d38ec7ce809ccf  codebase-memory-mcp-linux-amd64-portable.tar.gz
