@@ -1,0 +1,1 @@
+45ecbca1bf4dfb108c482fde341a483ab9e908a6e1c2948234ee3dd31ab81b4f  /tmp/opencode/cbm-downloads/codebase-memory-mcp-linux-amd64-portable.tar.gz
