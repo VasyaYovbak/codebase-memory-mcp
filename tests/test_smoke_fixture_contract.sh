@@ -506,8 +506,9 @@ if sys.platform != "win32":
             help_result.returncode == 0
             and "--dir" in help_result.stdout
             and "--skip-config" in help_result.stdout
-            and "--clients" in help_result.stdout,
-            "install.sh --help must document dir, skip-config, and clients",
+            and "--clients" in help_result.stdout
+            and "--mode" in help_result.stdout,
+            "install.sh --help must document dir, skip-config, clients, and mode",
         )
 
         base_env = dict(os.environ)
@@ -556,6 +557,8 @@ if sys.platform != "win32":
             "selected-args.log",
             f"--dir={selected_dir}",
             "--clients=claude,codex",
+            "--mode",
+            "cli",
             "--skip-config",
         )
         require(
@@ -567,9 +570,10 @@ if sys.platform != "win32":
                 "--force",
                 f"--dir={selected_dir}",
                 "--clients=claude,codex",
+                "--mode=cli",
                 "--skip-config",
             ],
-            "install.sh must forward the explicit clients selector with dir and skip-config",
+            "install.sh must forward the explicit clients selector and mode with dir and skip-config",
         )
 
         ordinary_dir = temp_path / "ordinary-bin"

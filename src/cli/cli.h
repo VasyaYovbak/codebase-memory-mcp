@@ -210,6 +210,7 @@ bool cbm_cli_clients_apply_selection_for_testing(const char *spec, cbm_detected_
 size_t cbm_cli_clients_count_for_testing(void);
 const char *cbm_cli_clients_token_for_testing(size_t index);
 void cbm_cli_set_client_selection_for_testing(const char *spec);
+void cbm_cli_set_agent_install_mode_for_testing(bool cli_mode);
 #endif
 
 #ifdef CBM_CLI_ENABLE_TEST_API

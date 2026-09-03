@@ -21,6 +21,8 @@ INSTALL_DIR="$HOME/.local/bin"
 SKIP_CONFIG=false
 CLIENTS_SET=false
 CLIENTS=""
+MODE_SET=false
+MODE=""
 CBM_DOWNLOAD_URL="${CBM_DOWNLOAD_URL:-https://raw.githubusercontent.com/${REPO}/downloads}"
 
 # Security: every remote hop must remain HTTPS. Plain HTTP is accepted only
@@ -100,14 +102,33 @@ while [ "$#" -gt 0 ]; do
             CLIENTS="${1#--clients=}"
             shift
             ;;
+        --mode=*)
+            MODE_SET=true
+            MODE="${1#--mode=}"
+            if [[ "$MODE" != "mcp" && "$MODE" != "cli" ]]; then
+                echo "install.sh: '--mode' must be mcp or cli. Please consult --help." >&2
+                exit 2
+            fi
+            shift
+            ;;
+        --mode)
+            if [ "$#" -lt 2 ] || [[ "$2" == -* ]] || [[ "$2" != "mcp" && "$2" != "cli" ]]; then
+                echo "install.sh: '--mode' needs mcp or cli. Please consult --help." >&2
+                exit 2
+            fi
+            MODE_SET=true
+            MODE="$2"
+            shift 2
+            ;;
         --skip-config)
             SKIP_CONFIG=true
             shift
             ;;
         --help|-h)
-            echo "Usage: install.sh [--dir=<path>] [--clients=<list>] [--skip-config]"
+            echo "Usage: install.sh [--dir=<path>] [--clients=<list>] [--mode=<mcp|cli>] [--skip-config]"
             echo "  --dir PATH       Install directory (default: ~/.local/bin)"
             echo "  --clients LIST   Configure only comma-separated clients"
+            echo "  --mode MODE      MCP (default) or CLI bridge for Codex and OpenCode"
             echo "  --skip-config    Skip automatic agent configuration"
             exit 0
             ;;
@@ -338,6 +359,9 @@ DEST="$INSTALL_DIR/codebase-memory-mcp"
 INSTALL_ARGS=(-y --force "--dir=$INSTALL_DIR")
 if [ "$CLIENTS_SET" = true ]; then
     INSTALL_ARGS+=("--clients=$CLIENTS")
+fi
+if [ "$MODE_SET" = true ]; then
+    INSTALL_ARGS+=("--mode=$MODE")
 fi
 if [ "$SKIP_CONFIG" = true ]; then
     INSTALL_ARGS+=(--skip-config)

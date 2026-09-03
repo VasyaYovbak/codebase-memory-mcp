@@ -69,7 +69,8 @@ Unblock-File .\install.ps1
 
 > **Note:** If you see a script execution policy error, run `Set-ExecutionPolicy -Scope Process Bypass` first, or invoke with `PowerShell -ExecutionPolicy Bypass -File .\install.ps1`.
 
-Options: `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
+Options: `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location), and
+`--mode=cli` (opt into the Codex/OpenCode CLI bridge instead of MCP).
 
 > **Antivirus note:** Microsoft Defender may flag a release binary as
 > `Trojan:Script/Wacatac.B!ml`. This is a known false positive — typically 61 of
@@ -107,7 +108,7 @@ Restart your coding agent. Say **"Index this project"** — done.
 The `install` command automatically strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
 </details>
 
-The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported. Codex uses the local one-shot CLI: its installed guidance uses `$CBM <tool>`, with `$CBM` already including `cli`. OpenCode also receives its MCP entry and three scoped subagents; its plugin keeps the same CLI command available and starts the shared daemon once when OpenCode loads.
+The `install` command auto-detects installed coding agents and configures their documented MCP entries plus durable instructions, skills, and lifecycle hooks where supported. MCP is the default, including Codex and OpenCode. `install --mode cli` instead removes CBM's MCP entries for those two clients, installs Codex's `$CBM <tool>` configuration and OpenCode's CLI plugin, and keeps their MCP-only child profiles out of the configuration.
 
 ### Session Coordination Daemon
 
@@ -485,10 +486,10 @@ overwrite user-modified agents.
 | Agent | Activation | MCP config | Durable context / augmentation |
 |-------|------------|------------|--------------------------------|
 | Claude Code | Detected | `~/.claude.json` | Skill + three exact-tool graph agents; `SessionStart`, `SubagentStart`, non-blocking `PreToolUse` for `Grep`/`Glob`/`Bash`, and post-`Read` coverage |
-| Codex CLI | Detected | `$CODEX_HOME/config.toml` | `AGENTS.md`, skill, three read-only agents; `SessionStart` + `SubagentStart` |
+| Codex CLI | Detected | `$CODEX_HOME/config.toml` | `AGENTS.md`, skill, and three read-only MCP agents; `--mode cli` installs `$CBM` plus lifecycle hooks instead |
 | Gemini CLI | Detected | `.gemini/settings.json` | `GEMINI.md`, three explicit read/graph-tool subagents; `BeforeTool`, `AfterTool` `read_file` coverage, and `SessionStart` |
 | Zed | Detected | platform `settings.json` (JSONC) | `AGENTS.md` + shared skill |
-| OpenCode | Detected | `$OPENCODE_CONFIG` or resolved global config | `AGENTS.md`, skill, three deny-by-default read-only agents; plugin adds grep/glob graph lookup, post-`read` coverage, first-tool-result session context, and post-compaction reinjection |
+| OpenCode | Detected | `$OPENCODE_CONFIG` or resolved global config | `AGENTS.md`, skill, and three deny-by-default read-only MCP agents; `--mode cli` installs the `$CBM` plugin and warms the daemon instead |
 | Antigravity | Detected | `.gemini/config/mcp_config.json` | `.gemini/GEMINI.md` |
 | Aider | Detected | — | `CONVENTIONS.md` via `.aider.conf.yml` |
 | KiloCode | Detected | `.config/kilo/kilo.jsonc` | Rule + three graph-tool subagents with deny-by-default permissions |

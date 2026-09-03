@@ -5369,8 +5369,8 @@ TEST(cli_durable_profiles_follow_current_vendor_paths) {
     files_ok = files_ok && test_file_contains_all(path, claude_terms, 7U);
 
     snprintf(path, sizeof(path), "%s/config.toml", codex_home);
-    const char *const codex_terms[] = {"[shell_environment_policy]",
-                                       "CBM = \"/opt/codebase-memory-mcp cli\""};
+    const char *const codex_terms[] = {"[mcp_servers.codebase-memory-mcp]",
+                                       "command = \"/opt/codebase-memory-mcp\""};
     files_ok = files_ok && test_file_contains_all(path, codex_terms, 2U);
     snprintf(path, sizeof(path), "%s/AGENTS.md", codex_home);
     const char *const codex_instructions[] = {"Codebase Memory", "$CBM explore_search"};
@@ -5390,11 +5390,12 @@ TEST(cli_durable_profiles_follow_current_vendor_paths) {
     const char *const opencode_instructions[] = {"Codebase Memory", "$CBM explore_search"};
     files_ok = files_ok && test_file_contains_all(path, opencode_instructions, 2U);
     snprintf(path, sizeof(path), "%s/.config/opencode/plugins/cbm-augment.ts", tmpdir);
-    const char *const opencode_plugin[] = {"shell.env", "output.env.CBM", " cli'"};
-    files_ok = files_ok && test_file_contains_all(path, opencode_plugin, 3U);
+    char *opencode_plugin = read_test_file_alloc(path);
+    files_ok = files_ok && (!opencode_plugin || !strstr(opencode_plugin, "shell.env"));
+    free(opencode_plugin);
     snprintf(path, sizeof(path), "%s/.config/opencode/agents/codebase-memory.md", tmpdir);
     struct stat opencode_agent_state;
-    files_ok = files_ok && stat(path, &opencode_agent_state) != 0;
+    files_ok = files_ok && stat(path, &opencode_agent_state) == 0;
 
     snprintf(path, sizeof(path), "%s/agents/codebase-memory.md", qwen_home);
     const char *const qwen_terms[] = {"name: codebase-memory",
@@ -5787,9 +5788,9 @@ TEST(cli_owned_durable_profiles_preserve_user_files) {
     snprintf(opencode_agent, sizeof(opencode_agent),
              "%s/.config/opencode/agents/codebase-memory.md", tmpdir);
     struct stat file_state;
-    bool exact_installed = stat(codex_agent, &file_state) != 0 &&
-                           stat(copilot_skill, &file_state) == 0 &&
-                           stat(opencode_agent, &file_state) != 0;
+    bool exact_installed = stat(codex_agent, &file_state) == 0 &&
+                            stat(copilot_skill, &file_state) == 0 &&
+                            stat(opencode_agent, &file_state) == 0;
     const char *modified_codex = "name = \"user-owned-codebase-memory\"\n";
     const char *modified_skill = "---\nname: codebase-memory\ndescription: User copy.\n---\n";
     char codex_agents_dir[768];
@@ -5868,7 +5869,7 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
     write_test_file(auditor_path, rc1_auditor);
     free(rc1_auditor);
 
-    /* CLI-first installation retires only CBM-owned MCP profiles. */
+    /* CLI mode retires only CBM-owned MCP profiles. */
     char installed_binary[640];
     char expected_environment[768];
 #ifdef _WIN32
@@ -5880,22 +5881,27 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
 #endif
     snprintf(expected_environment, sizeof(expected_environment),
              "set = { CBM = \"%s cli\" }", installed_binary);
+    char config_path[768];
+    snprintf(config_path, sizeof(config_path), "%s/.codex/config.toml", tmpdir);
+    int mcp_config_rc = cbm_upsert_codex_mcp(installed_binary, config_path);
+    cbm_cli_set_agent_install_mode_for_testing(true);
     char *plan = cbm_build_install_plan_json(tmpdir, installed_binary);
     bool plan_ok =
         plan && !strstr(plan, scout_path) && !strstr(plan, verify_path) && !strstr(plan, auditor_path);
     free(plan);
 
     int install_rc = cbm_install_agent_configs(tmpdir, installed_binary, false, false);
+    cbm_cli_set_agent_install_mode_for_testing(false);
     char *scout = read_test_file_alloc(scout_path);
     char *verify = read_test_file_alloc(verify_path);
     char *auditor = read_test_file_alloc(auditor_path);
-    char config_path[768];
-    snprintf(config_path, sizeof(config_path), "%s/.codex/config.toml", tmpdir);
     char *config = read_test_file_alloc(config_path);
     struct stat state;
-    bool installed = install_rc == 0 && scout && strcmp(scout, foreign_scout) == 0 &&
-                     stat(verify_path, &state) != 0 && stat(auditor_path, &state) != 0 && config &&
-                     strstr(config, expected_environment) && !strstr(config, "mcp_servers.codebase-memory-mcp");
+    bool installed = mcp_config_rc == 0 && install_rc == 0 && scout &&
+                     strcmp(scout, foreign_scout) == 0 && stat(verify_path, &state) != 0 &&
+                     stat(auditor_path, &state) != 0 && config &&
+                     strstr(config, expected_environment) &&
+                     !strstr(config, "mcp_servers.codebase-memory-mcp");
     free(scout);
     free(verify);
     free(auditor);
@@ -5921,7 +5927,68 @@ TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall) {
     restore_test_env("CODEX_HOME", saved_codex);
     test_rmdir_r(tmpdir);
     if (!plan_ok || !installed || !ownership_safe)
-        FAIL("Codex CLI migration must remove owned MCP profiles and preserve user files");
+        FAIL("explicit Codex CLI mode must remove owned MCP profiles and preserve user files");
+    PASS();
+}
+
+TEST(cli_opencode_cli_mode_replaces_owned_mcp) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-opencode-mode-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char *saved_home = save_test_env("HOME");
+    char *saved_path = save_test_env("PATH");
+    char *saved_opencode = save_test_env("OPENCODE_CONFIG");
+    char *saved_xdg = save_test_env("XDG_CONFIG_HOME");
+    cbm_setenv("HOME", tmpdir, 1);
+    cbm_setenv("PATH", tmpdir, 1);
+    cbm_unsetenv("OPENCODE_CONFIG");
+    cbm_unsetenv("XDG_CONFIG_HOME");
+
+    char config_dir[512];
+    char config_path[640];
+    char plugin_path[640];
+    char agent_path[640];
+    snprintf(config_dir, sizeof(config_dir), "%s/.config/opencode", tmpdir);
+    snprintf(config_path, sizeof(config_path), "%s/opencode.json", config_dir);
+    snprintf(plugin_path, sizeof(plugin_path), "%s/plugins/cbm-augment.ts", config_dir);
+    snprintf(agent_path, sizeof(agent_path), "%s/agents/codebase-memory.md", config_dir);
+    test_mkdirp(config_dir);
+
+    cbm_cli_set_agent_install_mode_for_testing(false);
+    int mcp_rc = cbm_install_agent_configs(tmpdir, "/opt/codebase-memory-mcp", false, false);
+    static const char annotated_mcp[] =
+        "{\n"
+        "  \"mcp\": {\n"
+        "    \"codebase-memory-mcp\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"type\": \"local\",\n"
+        "      \"command\": [\"/opt/codebase-memory-mcp\"]\n"
+        "    }\n"
+        "  }\n"
+        "}\n";
+    write_test_file(config_path, annotated_mcp);
+    cbm_cli_set_agent_install_mode_for_testing(true);
+    int cli_rc = cbm_install_agent_configs(tmpdir, "/opt/codebase-memory-mcp", false, false);
+    cbm_cli_set_agent_install_mode_for_testing(false);
+
+    char *config = read_test_file_alloc(config_path);
+    const char *const plugin_terms[] = {"shell.env", "output.env.CBM", "daemon start"};
+    struct stat agent_state;
+    bool switched = mcp_rc == 0 && cli_rc == 0 && config &&
+                    !strstr(config, "codebase-memory-mcp") &&
+                    test_file_contains_all(plugin_path, plugin_terms, 3U) &&
+                    stat(agent_path, &agent_state) != 0;
+    free(config);
+
+    restore_test_env("HOME", saved_home);
+    restore_test_env("PATH", saved_path);
+    restore_test_env("OPENCODE_CONFIG", saved_opencode);
+    restore_test_env("XDG_CONFIG_HOME", saved_xdg);
+    test_rmdir_r(tmpdir);
+    if (!switched)
+        FAIL("OpenCode CLI mode must replace CBM-owned MCP with its CLI plugin");
     PASS();
 }
 
@@ -11344,13 +11411,17 @@ TEST(cli_upsert_codex_cli_environment) {
 
     char existing_policy[512];
     snprintf(existing_policy, sizeof(existing_policy), "%s/existing.toml", tmpdir);
-    const char *policy = "[shell_environment_policy]\ninherit = \"all\"\n";
+    const char *policy = "[mcp_servers.codebase-memory-mcp]\n"
+                         "command = \"/usr/local/bin/codebase-memory-mcp\"\n"
+                         "args = []\n\n"
+                         "[shell_environment_policy]\ninherit = \"all\"\n";
     write_test_file(existing_policy, policy);
     ASSERT(cbm_upsert_codex_cli_environment("/usr/local/bin/codebase-memory-mcp", existing_policy) !=
            0);
     data = read_test_file(existing_policy);
     ASSERT_NOT_NULL(data);
     ASSERT(strcmp(data, policy) == 0);
+    ASSERT_NOT_NULL(strstr(data, "mcp_servers.codebase-memory-mcp"));
 
     test_rmdir_r(tmpdir);
     PASS();
@@ -13930,6 +14001,7 @@ SUITE(cli) {
     RUN_TEST(cli_warp_installs_shared_skill_without_mcp_or_permissions);
     RUN_TEST(cli_owned_durable_profiles_preserve_user_files);
     RUN_TEST(cli_tiered_codex_profiles_migrate_preserve_and_uninstall);
+    RUN_TEST(cli_opencode_cli_mode_replaces_owned_mcp);
     RUN_TEST(cli_tiered_vibe_installs_matching_agent_prompt_sets);
     RUN_TEST(cli_tiered_grok_installs_profiles_and_withholds_hooks);
     RUN_TEST(cli_grok_mcp_preserves_foreign_table);

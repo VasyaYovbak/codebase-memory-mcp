@@ -88,9 +88,24 @@ function Invoke-CbmDownload {
 }
 
 $SkipConfig = $false
-foreach ($arg in $args) {
+$Mode = $null
+for ($i = 0; $i -lt $args.Count; $i++) {
+    $arg = $args[$i]
     if ($arg -eq "--skip-config") { $SkipConfig = $true }
     if ($arg -like "--dir=*") { $InstallDir = $arg.Substring(6) }
+    if ($arg -like "--mode=*") { $Mode = $arg.Substring(7) }
+    if ($arg -eq "--mode" -and ($i + 1 -ge $args.Count -or $args[$i + 1] -like "-*")) {
+        Write-Host "error: --mode requires mcp or cli" -ForegroundColor Red
+        exit 2
+    }
+    if ($arg -eq "--mode") {
+        $i++
+        $Mode = $args[$i]
+    }
+}
+if ($null -ne $Mode -and $Mode -notin @("mcp", "cli")) {
+    Write-Host "error: --mode must be mcp or cli" -ForegroundColor Red
+    exit 2
 }
 
 # Detect the OS architecture. RuntimeInformation.OSArchitecture reports the real
@@ -332,6 +347,7 @@ Get-ChildItem -LiteralPath $InstallDir -Filter "$BinName.retired-*" -ErrorAction
 
 $InstallArgs = @("install", "-y", "--force", "--dir=$InstallDir")
 if ($SkipConfig) { $InstallArgs += "--skip-config" }
+if ($null -ne $Mode) { $InstallArgs += "--mode=$Mode" }
 & $DownloadedBinary @InstallArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Host "error: installation failed (exit code $LASTEXITCODE)" -ForegroundColor Red
