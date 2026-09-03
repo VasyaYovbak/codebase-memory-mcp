@@ -21,7 +21,7 @@ INSTALL_DIR="$HOME/.local/bin"
 SKIP_CONFIG=false
 CLIENTS_SET=false
 CLIENTS=""
-CBM_DOWNLOAD_URL="${CBM_DOWNLOAD_URL:-https://github.com/${REPO}/releases/latest/download}"
+CBM_DOWNLOAD_URL="${CBM_DOWNLOAD_URL:-https://raw.githubusercontent.com/${REPO}/downloads}"
 
 # Security: every remote hop must remain HTTPS. Plain HTTP is accepted only
 # for an exact loopback authority used by local smoke tests, with redirects

@@ -20,7 +20,7 @@ $WindowsArchiveNames = @(
     "install.ps1",
     "THIRD_PARTY_NOTICES.md"
 )
-$BaseUrl = if ($env:CBM_DOWNLOAD_URL) { $env:CBM_DOWNLOAD_URL } else { "https://github.com/$Repo/releases/latest/download" }
+$BaseUrl = if ($env:CBM_DOWNLOAD_URL) { $env:CBM_DOWNLOAD_URL } else { "https://raw.githubusercontent.com/$Repo/downloads" }
 
 try { $BaseUri = [Uri]$BaseUrl } catch { $BaseUri = $null }
 $AllowLoopbackHttp = (
