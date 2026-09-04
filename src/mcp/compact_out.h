@@ -43,7 +43,7 @@ void cbm_tree_table_header(cbm_sb_t *sb, const char *key, int n, const char *con
                            int ncols);
 
 /* Row cells: call row_begin, then cell_* per column (first=true for the
- * first cell), then row_end. Empty/NULL strings emit as empty cells. */
+ * first cell), then row_end. Empty/NULL strings emit as "" cells. */
 void cbm_tree_row_begin(cbm_sb_t *sb);
 void cbm_tree_cell_str(cbm_sb_t *sb, const char *val, bool first);
 void cbm_tree_cell_int(cbm_sb_t *sb, long long v, bool first);

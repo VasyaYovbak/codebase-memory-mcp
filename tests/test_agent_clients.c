@@ -1286,6 +1286,7 @@ TEST(client_adapter_opencode_starts_daemon_and_injects_cli_environment) {
     ASSERT_NOT_NULL(strstr(js, ".quiet().nothrow()"));
     ASSERT_NOT_NULL(strstr(js, "'shell.env'"));
     ASSERT_NOT_NULL(strstr(js, "output.env.CBM = CBM"));
+    ASSERT_NOT_NULL(strstr(js, "output.env.CBM_LOG_LEVEL"));
     ASSERT_NULL(strstr(js, "registerTool"));
     ASSERT_NULL(strstr(js, "hook-augment"));
     ASSERT_NULL(strstr(js, "mcp"));

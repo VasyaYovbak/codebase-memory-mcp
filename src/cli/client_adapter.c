@@ -273,9 +273,12 @@ char *cbm_client_adapter_opencode(const char *binary_path) {
                    "  // `daemon start` is idempotent; pay startup once while the plugin loads.\n"
                    "  await $`${CBM_BINARY} daemon start`.quiet().nothrow();\n\n"
                    "  return {\n"
-                   "    'shell.env': async (_input, output) => {\n"
-                   "      output.env.CBM = CBM;\n"
-                   "    },\n"
+                    "    'shell.env': async (_input, output) => {\n"
+                    "      output.env.CBM = CBM;\n"
+                    "      // Quiet mem.* info logs on stderr by default; an explicit\n"
+                    "      // user value wins, real errors stay visible.\n"
+                    "      if (!output.env.CBM_LOG_LEVEL) output.env.CBM_LOG_LEVEL = 'error';\n"
+                    "    },\n"
                    "  };\n"
                    "};\n");
 

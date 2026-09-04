@@ -1883,8 +1883,7 @@ TEST(tool_get_file_outline_returns_bounded_filtered_columnar_rows_issue469) {
                             "{\"project\":\"outline-project\",\"file_path\":\"src/main.c\","
                             "\"labels\":[\"Function\",\"Method\"],\"limit\":1}");
     ASSERT_NOT_NULL(response);
-    ASSERT_NOT_NULL(strstr(response, "cols"));
-    ASSERT_NOT_NULL(strstr(response, "(cols: name label lines qn)"));
+    ASSERT_NOT_NULL(strstr(response, "{name,label,lines,sig,qn}"));
     ASSERT_NOT_NULL(strstr(response, "alpha"));
     ASSERT_NULL(strstr(response, "omega"));
     ASSERT_NULL(strstr(response, "IgnoredClass"));
@@ -1963,6 +1962,86 @@ TEST(tool_get_file_outline_validates_json_path_limit_and_cancel_issue469) {
     free(response);
 
     cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* Default outline rows carry a one-line declaration signature sliced from
+ * source (multi-line C declarator collapses; single-line Python def stays one
+ * line); compact:true drops the sig column; non-boolean compact is rejected. */
+TEST(tool_get_file_outline_sig_default_and_compact_flag) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_outline_sig_XXXXXX");
+    ASSERT_NOT_NULL(cbm_mkdtemp(tmp));
+    char src_path[600];
+    snprintf(src_path, sizeof(src_path), "%s/main.c", tmp);
+    FILE *fp = fopen(src_path, "w");
+    ASSERT_NOT_NULL(fp);
+    fprintf(fp, "int alpha(int x,\n          int y) {\n    return x + y;\n}\n");
+    fclose(fp);
+    char py_path[600];
+    snprintf(py_path, sizeof(py_path), "%s/util.py", tmp);
+    fp = fopen(py_path, "w");
+    ASSERT_NOT_NULL(fp);
+    fprintf(fp, "def helper(name, count):\n    return name * count\n");
+    fclose(fp);
+
+    cbm_mcp_server_t *srv = setup_mcp_with_data();
+    cbm_store_t *store = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(store);
+    ASSERT_EQ(cbm_store_upsert_project(store, "outline-sig", tmp), CBM_STORE_OK);
+    cbm_mcp_server_set_project(srv, "outline-sig");
+    cbm_node_t nodes[] = {
+        {.project = "outline-sig",
+         .label = "Function",
+         .name = "alpha",
+         .qualified_name = "outline-sig.main.alpha",
+         .file_path = "main.c",
+         .start_line = 1,
+         .end_line = 4},
+        {.project = "outline-sig",
+         .label = "Function",
+         .name = "helper",
+         .qualified_name = "outline-sig.util.helper",
+         .file_path = "util.py",
+         .start_line = 1,
+         .end_line = 2},
+    };
+    for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
+        ASSERT_GT(cbm_store_upsert_node(store, &nodes[i]), 0);
+    }
+
+    char *response =
+        cbm_mcp_handle_tool(srv, "get_file_outline",
+                            "{\"project\":\"outline-sig\",\"file_path\":\"main.c\"}");
+    ASSERT_NOT_NULL(response);
+    ASSERT_NOT_NULL(strstr(response, "{name,label,lines,sig,qn}"));
+    ASSERT_NOT_NULL(strstr(response, "int alpha(int x, int y) {"));
+    free(response);
+
+    response = cbm_mcp_handle_tool(srv, "get_file_outline",
+                                   "{\"project\":\"outline-sig\",\"file_path\":\"util.py\"}");
+    ASSERT_NOT_NULL(response);
+    ASSERT_NOT_NULL(strstr(response, "def helper(name, count):"));
+    free(response);
+
+    response = cbm_mcp_handle_tool(
+        srv, "get_file_outline",
+        "{\"project\":\"outline-sig\",\"file_path\":\"main.c\",\"compact\":true}");
+    ASSERT_NOT_NULL(response);
+    ASSERT_NOT_NULL(strstr(response, "{name,label,lines,qn}"));
+    ASSERT_NULL(strstr(response, "int alpha(int x"));
+    free(response);
+
+    response = cbm_mcp_handle_tool(
+        srv, "get_file_outline",
+        "{\"project\":\"outline-sig\",\"file_path\":\"main.c\",\"compact\":\"yes\"}");
+    ASSERT_NOT_NULL(response);
+    ASSERT_NOT_NULL(strstr(response, "compact must be a boolean"));
+    ASSERT_NOT_NULL(strstr(response, "isError"));
+    free(response);
+
+    cbm_mcp_server_free(srv);
+    th_rmtree(tmp);
     PASS();
 }
 
@@ -13830,11 +13909,11 @@ TEST(bm25_results_and_total_stay_consistent_issue518) {
     /* Both the Module (body: "aggregates telemetry...") and the Function
      * (name: telemetryCollector) match, and both are now eligible. */
     const char *total = strstr(inner, "total: ");
-    const char *results = strstr(inner, "results: ");
+    const char *results = strstr(inner, "results[");
     ASSERT_NOT_NULL(total);
     ASSERT_NOT_NULL(results);
     int total_n = atoi(total + strlen("total: "));
-    int results_n = atoi(results + strlen("results: "));
+    int results_n = atoi(results + strlen("results["));
     ASSERT_EQ(total_n, 2);
     ASSERT_EQ(results_n, total_n);
     ASSERT_NOT_NULL(strstr(inner, "prose.action_yml"));
@@ -14069,6 +14148,7 @@ SUITE(mcp) {
     RUN_TEST(tool_compare_graphs_cancel_and_readonly_handles_release_issue525);
     RUN_TEST(tool_get_file_outline_returns_bounded_filtered_columnar_rows_issue469);
     RUN_TEST(tool_get_file_outline_validates_json_path_limit_and_cancel_issue469);
+    RUN_TEST(tool_get_file_outline_sig_default_and_compact_flag);
     RUN_TEST(tool_search_graph_basic);
     RUN_TEST(tool_search_graph_semantic_only_skips_structural_results_issue1295);
     RUN_TEST(tool_trace_totals_respect_test_filter);

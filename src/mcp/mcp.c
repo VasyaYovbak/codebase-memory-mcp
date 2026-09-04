@@ -577,11 +577,15 @@ static const tool_def_t TOOLS[] = {
      "\"additionalProperties\":false,\"required\":[\"project\"],\"anyOf\":[{\"required\":[\"query\"]},"
      "{\"required\":[\"queries\"]}]}"},
 
-    {"get_file_outline", "Get file outline",
+     {"get_file_outline", "Get file outline",
      "Return a compact declaration outline for one exact repository-relative file. Results are "
      "filtered by optional exact labels, ordered deterministically by source position, and "
      "bounded with exact total/offset/limit pagination metadata. File/folder/container nodes "
-     "are excluded. The query observes request cancellation and fails without partial output.",
+     "are excluded. Each row carries a one-line declaration signature (sig) sliced from "
+     "source so callers can pick symbols without a follow-up read; pass compact:true to "
+     "drop the sig column for mass sweeps. Unreadable sources degrade to an empty sig, "
+     "never to an error. The query observes request cancellation and fails without "
+     "partial output.",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},"
      "\"file_path\":{\"type\":\"string\",\"description\":\"Exact repository-relative "
      "file path\"},\"labels\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
@@ -589,7 +593,9 @@ static const tool_def_t TOOLS[] = {
      "\"limit\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":200,\"default\":100},"
      "\"offset\":{\"type\":\"integer\",\"minimum\":0,\"default\":0},"
      "\"format\":{\"type\":\"string\",\"enum\":[\"tree\",\"json\"],"
-     "\"default\":\"tree\"}},\"additionalProperties\":false,"
+     "\"default\":\"tree\"},\"compact\":{\"type\":\"boolean\",\"default\":false,"
+     "\"description\":\"Drop the sig column; use for multi-file sweeps\"}},"
+     "\"additionalProperties\":false,"
      "\"required\":[\"project\",\"file_path\"]}"},
 
     {"get_graph_schema", "Get graph schema",
@@ -9449,6 +9455,126 @@ static bool file_outline_request_cancelled(void *context) {
     return mcp_request_cancelled((const cbm_mcp_server_t *)context);
 }
 
+/* baza: language-agnostic line slicer is the ceiling here (paren counting can
+ * be fooled by brackets in strings/comments; the 5-line/256-char caps bound
+ * the damage). Upgrade path is per-language tree-sitter signature queries. */
+enum { OUTLINE_SIG_MAX_LINES = 5, OUTLINE_SIG_MAX_CHARS = 256 };
+enum { OUTLINE_SRC_MAX_BYTES = 1024 * 1024 };
+
+static char *outline_slurp(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_size <= 0 || st.st_size > OUTLINE_SRC_MAX_BYTES) {
+        return NULL;
+    }
+    FILE *fp = cbm_fopen(path, "r");
+    if (!fp) {
+        return NULL;
+    }
+    char *buf = malloc((size_t)st.st_size + 1U);
+    if (!buf) {
+        (void)fclose(fp);
+        return NULL;
+    }
+    size_t n = fread(buf, 1, (size_t)st.st_size, fp);
+    (void)fclose(fp);
+    buf[n] = '\0';
+    return buf;
+}
+
+static int *outline_split_lines(const char *src, int *out_count) {
+    int cap = 128;
+    int n = 0;
+    int *offs = malloc((size_t)cap * sizeof(*offs));
+    if (!offs) {
+        return NULL;
+    }
+    offs[n++] = 0;
+    for (const char *p = src; *p; p++) {
+        if (*p == '\n') {
+            if (n == cap) {
+                cap *= 2;
+                int *grown = realloc(offs, (size_t)cap * sizeof(*grown));
+                if (!grown) {
+                    free(offs);
+                    return NULL;
+                }
+                offs = grown;
+            }
+            offs[n++] = (int)(p - src) + 1;
+        }
+    }
+    *out_count = n;
+    return offs;
+}
+
+/* Slice a one-line declaration signature starting at 1-based start_line.
+ * Language-agnostic: always take the first line, keep consuming only while
+ * paren depth stays unbalanced (multi-line declarators in C, Python, TS, Go,
+ * Rust, ...), whitespace collapsed, hard-capped. Anything unreadable yields
+ * "". */
+static void outline_extract_sig(char *out, size_t outsz, const char *src,
+                                const int *line_offs, int line_count, int start_line) {
+    if (!out || outsz == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (!src || !line_offs || line_count <= 0 || start_line < 1 ||
+        start_line > line_count) {
+        return;
+    }
+    size_t total = strlen(src);
+    size_t pos = 0;
+    int depth = 0;
+    for (int li = start_line - 1;
+         li < line_count && li < start_line - 1 + OUTLINE_SIG_MAX_LINES; li++) {
+        size_t ls = (size_t)line_offs[li];
+        size_t le = (li + 1 < line_count) ? (size_t)line_offs[li + 1] : total;
+        if (ls >= total) {
+            break;
+        }
+        if (le > total) {
+            le = total;
+        }
+        const char *line = src + ls;
+        size_t len = le - ls;
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            len--;
+        }
+        size_t head = 0;
+        while (head < len && (line[head] == ' ' || line[head] == '\t')) {
+            head++;
+        }
+        if (head >= len) {
+            continue;
+        }
+        for (size_t k = head; k < len; k++) {
+            if (line[k] == '(') {
+                depth++;
+            } else if (line[k] == ')' && depth > 0) {
+                depth--;
+            }
+        }
+        if (pos > 0 && pos + 1 < OUTLINE_SIG_MAX_CHARS && pos + 1 < outsz) {
+            out[pos++] = ' ';
+        }
+        for (size_t k = head; k < len && pos + 1 < OUTLINE_SIG_MAX_CHARS && pos + 1 < outsz;
+             k++) {
+            char c = line[k] == '\t' ? ' ' : line[k];
+            if (c == ' ' && pos > 0 && out[pos - 1] == ' ') {
+                continue;
+            }
+            out[pos++] = c;
+        }
+        if (depth == 0) {
+            break;
+        }
+    }
+    while (pos > 0 && out[pos - 1] == ' ') {
+        pos--;
+    }
+    out[pos] = '\0';
+}
+
 static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
     const char *args_text = args ? args : "{}";
     yyjson_doc *args_doc = yyjson_read(args_text, strlen(args_text), 0);
@@ -9527,6 +9653,17 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
         json_format = strcmp(format, "json") == 0;
     }
 
+    bool compact = false;
+    yyjson_val *compact_value = yyjson_obj_get(root, "compact");
+    if (compact_value) {
+        if (!yyjson_is_bool(compact_value)) {
+            free(project);
+            yyjson_doc_free(args_doc);
+            return cbm_mcp_text_result("compact must be a boolean", true);
+        }
+        compact = yyjson_get_bool(compact_value);
+    }
+
     const char *labels[CBM_STORE_FILE_OUTLINE_MAX_LABELS];
     int label_count = 0;
     yyjson_val *labels_value = yyjson_obj_get(root, "labels");
@@ -9588,12 +9725,42 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
     }
 
     char *payload = NULL;
+    /* Signatures are best-effort: any unreadable source (missing file, outside
+     * root, oversize) degrades every sig to "" instead of failing the call. */
+    char *outline_src = NULL;
+    int *outline_offs = NULL;
+    int outline_nlines = 0;
+    if (!compact && row_count > 0) {
+        char *root_path = get_project_root(srv, project);
+        if (root_path) {
+            char abs_path[CBM_SZ_4K];
+            int n = snprintf(abs_path, sizeof(abs_path), "%s/%s", root_path,
+                             normalized_path);
+            if (n > 0 && (size_t)n < sizeof(abs_path) &&
+                cbm_path_within_root(root_path, abs_path)) {
+                outline_src = outline_slurp(abs_path);
+            }
+            free(root_path);
+        }
+        if (outline_src) {
+            outline_offs = outline_split_lines(outline_src, &outline_nlines);
+            if (!outline_offs) {
+                free(outline_src);
+                outline_src = NULL;
+            }
+        }
+    }
     if (!json_format) {
         cbm_sb_t sb;
         cbm_sb_init(&sb);
         cbm_tree_scalar_str(&sb, "file_path", normalized_path);
-        static const char *const columns[] = {"name", "label", "lines", "qn"};
-        cbm_tree_table_header(&sb, "results", row_count, columns, 4);
+        if (!compact) {
+            static const char *const columns[] = {"name", "label", "lines", "sig", "qn"};
+            cbm_tree_table_header(&sb, "results", row_count, columns, 5);
+        } else {
+            static const char *const columns[] = {"name", "label", "lines", "qn"};
+            cbm_tree_table_header(&sb, "results", row_count, columns, 4);
+        }
         for (int i = 0; i < row_count; i++) {
             char lines[CBM_SZ_32];
             if (rows[i].start_line > 0) {
@@ -9603,10 +9770,24 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
             } else {
                 lines[0] = '\0';
             }
+            char sig[OUTLINE_SIG_MAX_CHARS + 1];
+            sig[0] = '\0';
+            if (outline_src) {
+                outline_extract_sig(sig, sizeof(sig), outline_src, outline_offs,
+                                    outline_nlines, rows[i].start_line);
+                char *safe = sanitize_utf8_lossy(sig);
+                if (safe) {
+                    snprintf(sig, sizeof(sig), "%s", safe);
+                    free(safe);
+                }
+            }
             cbm_tree_row_begin(&sb);
             cbm_tree_cell_str(&sb, rows[i].name, true);
             cbm_tree_cell_str(&sb, rows[i].label, false);
             cbm_tree_cell_str(&sb, lines, false);
+            if (!compact) {
+                cbm_tree_cell_str(&sb, sig, false);
+            }
             cbm_tree_cell_str(&sb, rows[i].qualified_name, false);
             cbm_tree_row_end(&sb);
         }
@@ -9622,9 +9803,17 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
         yyjson_mut_doc_set_root(doc, object);
         yyjson_mut_obj_add_str(doc, object, "file_path", normalized_path);
         yyjson_mut_val *columns = yyjson_mut_arr(doc);
-        static const char *const column_names[] = {"name", "label", "lines", "qn"};
-        for (size_t i = 0; i < sizeof(column_names) / sizeof(column_names[0]); i++) {
-            yyjson_mut_arr_add_str(doc, columns, column_names[i]);
+        if (!compact) {
+            static const char *const column_names[] = {"name", "label", "lines", "sig",
+                                                       "qn"};
+            for (size_t i = 0; i < sizeof(column_names) / sizeof(column_names[0]); i++) {
+                yyjson_mut_arr_add_str(doc, columns, column_names[i]);
+            }
+        } else {
+            static const char *const column_names[] = {"name", "label", "lines", "qn"};
+            for (size_t i = 0; i < sizeof(column_names) / sizeof(column_names[0]); i++) {
+                yyjson_mut_arr_add_str(doc, columns, column_names[i]);
+            }
         }
         yyjson_mut_obj_add_val(doc, object, "cols", columns);
         yyjson_mut_val *json_rows = yyjson_mut_arr(doc);
@@ -9637,10 +9826,24 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
             } else {
                 lines[0] = '\0';
             }
+            char sig[OUTLINE_SIG_MAX_CHARS + 1];
+            sig[0] = '\0';
+            if (outline_src) {
+                outline_extract_sig(sig, sizeof(sig), outline_src, outline_offs,
+                                    outline_nlines, rows[i].start_line);
+                char *safe = sanitize_utf8_lossy(sig);
+                if (safe) {
+                    snprintf(sig, sizeof(sig), "%s", safe);
+                    free(safe);
+                }
+            }
             yyjson_mut_val *row = yyjson_mut_arr(doc);
             yyjson_mut_arr_add_strcpy(doc, row, rows[i].name);
             yyjson_mut_arr_add_strcpy(doc, row, rows[i].label);
             yyjson_mut_arr_add_strcpy(doc, row, lines);
+            if (!compact) {
+                yyjson_mut_arr_add_strcpy(doc, row, sig);
+            }
             yyjson_mut_arr_add_strcpy(doc, row, rows[i].qualified_name);
             yyjson_mut_arr_add_val(json_rows, row);
         }
@@ -9654,6 +9857,8 @@ static char *handle_get_file_outline(cbm_mcp_server_t *srv, const char *args) {
         yyjson_mut_doc_free(doc);
     }
 
+    free(outline_offs);
+    free(outline_src);
     cbm_store_free_file_outline(rows, row_count);
     free(project);
     yyjson_doc_free(args_doc);
